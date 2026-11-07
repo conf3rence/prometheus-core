@@ -24,3 +24,4 @@ output/
 # Системный мусор (Windows/Mac)
 .DS_Store
 Thumbs.db
+*.zip
