@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+message: "Если вы используете этот код в своей работе, пожалуйста, цитируйте его следующим образом."
+title: "Prometheus Core: Monte Carlo Simulation of Gamma, Charged Particles, and Neutrons"
+abstract: "Программный комплекс для симуляции переноса излучения с верификацией по NIST, ICRP и ENDF/B. Включает JIT-оптимизацию через Numba и мультипроцессинг."
+authors:
+  - family-names: "Костин"
+    given-names: "Ярослав"
+license: MIT
+references:
+  - type: software
+    title: "OpenMC"
+    authors: ["Romano, Paul K.", "Horelik, Nicholas E.", "Herman, Bryan R.", "Nelson, Adam G.", "Forget, Benoit", "Smith, Kord"]
+    doi: "10.1016/j.anucene.2014.07.048"
+  - type: software
+    title: "xraylib"
+    authors: ["Schoonjans, Tom", "Brunetti, Antonio", "Golosio, Bruno", "Sanchez del Rio, Manuel", "Solé, Vicente Armando", "Ferrero, Claudio", "Vincze, Laszlo"]
+    doi: "10.1016/j.sab.2011.09.007"
+  - type: software
+    title: "Numba"
+    authors: ["Lam, Siu Kwan", "Pitrou, Antoine", "Seibert, Stanley"]
+    year: 2015
+    notes: "LLVM-based Python JIT Compiler"
+  - type: dataset
+    title: "NIST XCOM: Photon Cross Sections Database"
+    authors: ["Berger, M.J.", "Hubbell, J.H.", "Seltzer, S.M.", "Chang, J.", "Coursey, J.S.", "Sukumar, R.", "Zucker, D.S.", "Olsen, K."]
+    url: "https://physics.nist.gov/PhysRefData/Xcom/html/xcom1.html"
+  - type: report
+    title: "ICRP Publication 74: Conversion Coefficients for use in Radiological Protection Against External Radiation"
+    authors: ["International Commission on Radiological Protection"]
+    doi: "10.1016/S0146-6453(96)90010-X"
