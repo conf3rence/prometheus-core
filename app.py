@@ -1,4 +1,4 @@
-"""app.py — GUI Prometheus Core v3.0 (Full HD, Иконки, Горячие клавиши, Валидация)"""
+"""app.py — GUI Prometheus Core v3"""
 import os, sys, json, datetime, base64
 import multiprocessing as mp
 from io import BytesIO

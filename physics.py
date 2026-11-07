@@ -1,5 +1,5 @@
 """
-physics.py — физическое ядро Prometheus Core v3.0 (часть 1)
+physics.py — физическое ядро Prometheus Core v3
 Многослойность, Поляризация, Backscatter
 """
 import os, sys, math, json, subprocess, tempfile, datetime, logging
@@ -360,7 +360,7 @@ def gamma_mc(mat, R, spec_lines, n_hist, seed=42, ngrid=64, e_cut=0.001,
         "mu_rho": mat.mu_rho(max(meanE, mat.Emin)),
     }
 def attenuation_curve(mat, spec_lines, n_hist, thicknesses, seed=42):
-    """Возвращает [(thickness, transmission_model, transmission_theory), ...] для построения кривой ослабления."""
+    """Возвращает [(thickness, transmission_model, transmission_theory)] для построения кривой ослабления"""
     results = []
     mean_E = float(np.mean([l[0] for l in spec_lines])) if spec_lines else mat.Emin
     mu_macro = mat.macro(max(mean_E, mat.Emin))
@@ -420,7 +420,6 @@ def range_vs_energy(part, mat, nE=60):
 
 # ---------------------------------------------------------------------------
 #  НЕЙТРОНЫ — мост в WSL (запускает OpenMC в Linux)
-# ---------------------------------------------------------------------------
 NEUTRON_SCRIPT = r'''
 import os, json
 import numpy as np
@@ -572,9 +571,7 @@ def run_neutrons_wsl(cfg, log_cb):
     with open(res_path, encoding="utf-8") as f: stats = json.load(f)
     return {"spec_img": os.path.join(tmp, "spec.png"), "map_img":  os.path.join(tmp, "map.png"), "stats":    stats}
 
-# ---------------------------------------------------------------------------
-# ЛОГИРОВАНИЕ
-# ---------------------------------------------------------------------------
+# ЛОГИ
 _logger  = logging.getLogger("prometheus")
 _logger.setLevel(logging.DEBUG)
 _log_fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%H:%M:%S")
@@ -601,7 +598,6 @@ def fmt_hl(s):
     if s >= _H: return f"{s/_H:.3g} ч"
     if s >= 60: return f"{s/60:.3g} мин"
     return f"{s:.3g} с"
-# --- ВРЕМЕННЫЙ БЛОК ДЛЯ ПРОФИЛИРОВАНИЯ (удалить после Этапа 1) ---
 if __name__ == "__main__":
     import time
     print("=== Профилирование (ДО оптимизации) ===")
