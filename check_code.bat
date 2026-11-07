@@ -1,4 +1,5 @@
 @echo off
+setlocal
 chcp 65001 >nul
 color 0A
 title Prometheus Core: Проверка кода
@@ -77,28 +78,36 @@ call :earth_pass
 
 :: --- ПРОВЕРКИ ---
 call :header
-echo [1/4] Проверка синтаксиса Python...
-python -m py_compile app.py
-if errorlevel 1 goto error
-python -m py_compile physics.py
-if errorlevel 1 goto error
-python -m py_compile update_materials.py
-if errorlevel 1 goto error
+echo [1/5] Проверка синтаксиса Python...
+for %%f in (app.py physics.py update_materials.py check_consistency.py) do (
+    python -m py_compile %%f
+    if errorlevel 1 goto error
+)
 echo   Синтаксис в порядке.
 echo.
 
-echo [2/4] Проверка JSON-файлов...
+echo [2/5] Проверка наличия файлов данных...
+if not exist "data\materials.json" (echo   [НЕТ] data\materials.json & goto error)
+if not exist "data\isotopes.json"  (echo   [НЕТ] data\isotopes.json  & goto error)
+echo   Файлы на месте.
+echo.
+
+echo [3/5] Проверка JSON-файлов...
 python -c "import json; json.load(open('data/materials.json', encoding='utf-8')); json.load(open('data/isotopes.json', encoding='utf-8')); print('  JSON валиден.')"
 if errorlevel 1 goto error
 echo.
 
-echo [3/4] Проверка согласованности сечений...
+echo [4/5] Проверка согласованности сечений...
 python check_consistency.py
 if errorlevel 1 goto error
 echo.
 
-echo [4/4] Проверка импорта physics.py...
-python -c "import physics; print('  physics.py импортируется успешно.')"
+echo [5/5] Проверка импорта модулей...
+python -c "import numpy, matplotlib, numba, PySide6; print('  Зависимости OK.')"
+if errorlevel 1 goto error
+python -c "import physics; print('  physics.py OK.')"
+if errorlevel 1 goto error
+python -c "import app; print('  app.py OK.')"
 if errorlevel 1 goto error
 echo.
 
@@ -110,7 +119,7 @@ echo   ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ! Код готов к сборк
 echo ====================================================
 echo.
 pause
-goto :eof
+exit /b 0
 
 :error
 call :header
@@ -120,7 +129,7 @@ echo   ПРОВЕРКА НЕ ПРОЙДЕНА. Исправьте ошибки.
 echo ====================================================
 echo.
 pause
-goto :eof
+exit /b 1
 
 :: ==========================================
 :: ЗЕМЛЯ (12 КАДРОВ, 1 ОБОРОТ)
@@ -149,7 +158,7 @@ echo        :shhhyso+++++osyhhhhyo-
 echo          -oyhhhhhhhhhhhyo-
 echo            .:+osyhyo+:.
 echo               .-+oo+-.
-powershell -Command "Start-Sleep -Milliseconds 100" >nul
+choice /c x /t 1 /d x >nul
 
 call :header
 echo.
@@ -174,7 +183,7 @@ echo        :shhhyso+++++osyhhhhyo-
 echo          -oyhhhhhhhhhhhyo-
 echo            .:+osyhyo+:.
 echo               .-+oo+-.
-powershell -Command "Start-Sleep -Milliseconds 100" >nul
+choice /c x /t 1 /d x >nul
 
 call :header
 echo.
@@ -199,7 +208,7 @@ echo        :shhhyso+++++osyhhhhyo-
 echo          -oyhhhhhhhhhhhyo-
 echo            .:+osyhyo+:.
 echo               .-+oo+-.
-powershell -Command "Start-Sleep -Milliseconds 100" >nul
+choice /c x /t 1 /d x >nul
 
 call :header
 echo.
@@ -224,7 +233,7 @@ echo        :shhhyso+++++osyhhhhyo-
 echo          -oyhhhhhhhhhhhyo-
 echo            .:+osyhyo+:.
 echo               .-+oo+-.
-powershell -Command "Start-Sleep -Milliseconds 100" >nul
+choice /c x /t 1 /d x >nul
 
 call :header
 echo.
@@ -249,7 +258,7 @@ echo        :shhhyso+++++osyhhhhyo-
 echo          -oyhhhhhhhhhhhyo-
 echo            .:+osyhyo+:.
 echo               .-+oo+-.
-powershell -Command "Start-Sleep -Milliseconds 100" >nul
+choice /c x /t 1 /d x >nul
 
 call :header
 echo.
@@ -274,7 +283,7 @@ echo        :shhhyso+++++++osyhhhhyo-
 echo          -oyhhhhhhhhhhhhhyo-
 echo            .:+osyhyhyo+:.
 echo               .-+oooo+-.
-powershell -Command "Start-Sleep -Milliseconds 100" >nul
+choice /c x /t 1 /d x >nul
 
 call :header
 echo.
@@ -299,7 +308,7 @@ echo        :shhhyso+++++osyhhhhyo-
 echo          -oyhhhhhhhhhhhyo-
 echo            .:+osyhyo+:.
 echo               .-+oo+-.
-powershell -Command "Start-Sleep -Milliseconds 100" >nul
+choice /c x /t 1 /d x >nul
 
 call :header
 echo.
@@ -324,7 +333,7 @@ echo        :shhhyso+++++osyhhhhyo-
 echo          -oyhhhhhhhhhhhyo-
 echo            .:+osyhyo+:.
 echo               .-+oo+-.
-powershell -Command "Start-Sleep -Milliseconds 100" >nul
+choice /c x /t 1 /d x >nul
 
 call :header
 echo.
@@ -349,7 +358,7 @@ echo        :shhhyso+++++++osyhhhhyo-
 echo          -oyhhhhhhhhhhhhhyo-
 echo            .:+osyhyhyo+:.
 echo               .-+oooo+-.
-powershell -Command "Start-Sleep -Milliseconds 100" >nul
+choice /c x /t 1 /d x >nul
 
 call :header
 echo.
@@ -374,7 +383,7 @@ echo        :shhhyso+hhhhhhhh/osyhhhhyo-
 echo          -oyhhhhhhhhhhhhhhhyo-
 echo            .:+osyhyhyhyo+:.
 echo               .-+ooooo+-.
-powershell -Command "Start-Sleep -Milliseconds 100" >nul
+choice /c x /t 1 /d x >nul
 
 call :header
 echo.
@@ -399,5 +408,5 @@ echo        :shhhyso+++++osyhhhhyo-
 echo          -oyhhhhhhhhhhhyo-
 echo            .:+osyhyo+:.
 echo               .-+oo+-.
-powershell -Command "Start-Sleep -Milliseconds 100" >nul
+choice /c x /t 1 /d x >nul
 goto :eof

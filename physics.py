@@ -2,7 +2,7 @@
 physics.py — физическое ядро Prometheus Core v3
 Многослойность, Поляризация, Backscatter
 """
-import os, sys, math, json, subprocess, tempfile, datetime, logging
+import os, sys, math, json, subprocess, tempfile, datetime, logging, shutil
 import numpy as np
 try:
     from numba import njit
@@ -185,12 +185,11 @@ def _mc_core_numba(n_hist, seed, is_slab, R,
             
             if is_slab:
                 if dx > 1e-9:
-                    if px >= layer_ends[li] - 1e-9: db = (total_thick - px) / dx
-                    else: db = (layer_ends[li] - px) / dx
+                    db = (layer_ends[li] - px) / dx
                 elif dx < -1e-9:
-                    if px <= layer_starts[li] + 1e-9: db = -px / dx
-                    else: db = (layer_starts[li] - px) / dx
-                else: db = 1e12
+                    db = (layer_starts[li] - px) / dx
+                else: 
+                    db = 1e12
             else:
                 b = px*dx + py*dy + pz*dz
                 c = px*px + py*py + pz*pz - R*R
@@ -309,13 +308,27 @@ def gamma_mc(mat, R, spec_lines, n_hist, seed=42, ngrid=64, e_cut=0.001,
             Es, cdf, ngrid, gsc, rad_n, dr, e_cut
         ))
     else:
-        hist_per_proc = n_hist // n_procs; tasks = []
-        for i in range(n_procs):
-            count = hist_per_proc if i < n_procs - 1 else n_hist - (hist_per_proc * (n_procs - 1))
-            tasks.append((count, seed + i, geom == "slab", R, mat._tm, mat._c1, mat._c2, mat._t0, mat._sc,
-                          n_layers, tm_L, c1_L, c2_L, t0_L, sc_L, layer_starts, layer_ends, total_thick,
-                          Es, cdf, ngrid, gsc, rad_n, dr, e_cut))
-        with mp.Pool(processes=n_procs) as pool: results = pool.map(_mc_worker, tasks)
+        # БАТЧЕВЫЙ РАСЧЕТ: прогресс + возможность остановки
+        n_chunks = 10
+        hist_per_chunk = n_hist // n_chunks
+        chunk_tasks = []
+        for i in range(n_chunks):
+            count = hist_per_chunk if i < n_chunks - 1 else n_hist - (hist_per_chunk * (n_chunks - 1))
+            chunk_tasks.append((count, seed + i, geom == "slab", R, mat._tm, mat._c1, mat._c2, mat._t0, mat._sc,
+                                n_layers, tm_L, c1_L, c2_L, t0_L, sc_L, layer_starts, layer_ends, total_thick,
+                                Es, cdf, ngrid, gsc, rad_n, dr, e_cut))
+        
+        results = []
+        with mp.Pool(processes=n_procs) as pool:
+            for i, task in enumerate(chunk_tasks):
+                if should_stop and should_stop():
+                    pool.terminate()
+                    break
+                results.append(pool.apply(_mc_worker, (task,)))
+                if progress: progress((i + 1) / n_chunks)
+        
+        if not results:
+            return None  # расчёт отменён пользователем
         
         edep = sum(r[0] for r in results); edepsq = sum(r[1] for r in results)
         nph = sum(r[2] for r in results); nco = sum(r[3] for r in results); npa = sum(r[4] for r in results)
@@ -376,9 +389,18 @@ def attenuation_curve(mat, spec_lines, n_hist, thicknesses, seed=42):
 def absolute_dose(res, activity, act_unit, time, time_unit, use_decay, iso_name):
     A0= activity * ACTIVITY_U[act_unit]; T = time * TIME_U[time_unit]
     if iso_name in ISOTOPES:
-        iso = ISOTOPES[iso_name]; gpd = sum(l[1] for l in iso["lines"]); lam = math.log(2) / iso["half_life_s"]
-    else: gpd = 1.0; lam = 0.0
-    decays = A0/lam * (1 - math.exp(-lam*T)) if use_decay and lam > 0 else A0 * T
+        iso = ISOTOPES[iso_name]
+        gpd = sum(l[1] for l in iso["lines"])
+        hl = iso.get("half_life_s", 0.0)
+        lam = math.log(2) / hl if hl > 0 else 0.0
+    else: 
+        gpd = 1.0
+        lam = 0.0
+        
+    if use_decay and lam > 0:
+        decays = A0 / lam * (1 - math.exp(-lam * T))
+    else:
+        decays = A0 * T
     return {"dose_abs":res["dose"]*(decays*gpd)}
 
 def sp_heavy(T, mass, z, mat):
@@ -396,27 +418,30 @@ def sp_elec(T, mat):
     if b2 <= 1e-9: return 0.0, 0.0, 0.0
     I= mat["I"] * 1e-6; F = 1-b2 + (tau**2/8-(2*tau+1)*math.log(2))/(tau+1)**2
     coll = max(0.153536/b2*(mat["Z"]/mat["A"]) *(math.log(tau**2*(tau+2)/(2*(I/ME)**2)) + F), 0.0)
-    return (coll + coll*mat["Z"]*T/800.0)*mat["rho"], coll*mat["rho"], coll*mat["Z"]*T/800.0*mat["rho"]
+    # Феноменологическое ограничение сверху, чтобы тормозные потери не превышали столкновительные
+    rad_factor = min(1.0, mat["Z"] * T / 800.0)
+    return (coll + coll * rad_factor) * mat["rho"], coll * mat["rho"], coll * rad_factor * mat["rho"]
 
-def csda(part, T0, mat, nstep=4000, straggling=True):
+def csda(part, T0, mat, nstep=4000, straggling=True, seed=None):
     mass, z = PARTICLES[part]; ise = (part == "электрон")
+    rng = np.random.default_rng(seed) if seed is not None else np.random
     dT = T0 / nstep; x = 0.0; T = T0; dep = [0.0]; de = []
     xi = 0.05 if part == "протон" else 0.02 
     while T > dT:
         s = sp_elec(T, mat)[0] if ise else sp_heavy(T, mass, z, mat)
         if s <= 0.0: break
         if straggling:
-            dE_loss = dT + np.random.normal(0, dT * xi)
+            dE_loss = dT + rng.normal(0, dT * xi)
             dE_loss = max(dE_loss, 0.01 * dT)
         else: dE_loss = dT
         x += dE_loss / s; dep.append(x); de.append(s); T -= dE_loss
     de.append(de[-1] if de else 0.0)
     return x, np.array(dep), np.array(de)
 
-def range_vs_energy(part, mat, nE=60):
+def range_vs_energy(part, mat, nE=60, seed=None):
     Emin, Emax = (0.5, 500.0) if part in ("протон","альфа","дейтрон") else (0.05, 50.0)
     Es = np.linspace(Emin, Emax, nE)
-    return Es, np.array([csda(part, e, mat, nstep=800)[0] for e in Es])
+    return Es, np.array([csda(part, e, mat, nstep=800, seed=seed)[0] for e in Es])
 
 # ---------------------------------------------------------------------------
 #  НЕЙТРОНЫ — мост в WSL (запускает OpenMC в Linux)
@@ -553,23 +578,42 @@ def run_neutrons_wsl(cfg, log_cb):
         p = os.path.abspath(p).replace("\\", "/")
         if len(p) > 1 and p[1] == ":": p = "/mnt/" + p[0].lower() + p[2:]
         return p
-    script_path = os.path.join(tmp, "neu.py")
-    with open(script_path, "w", encoding="utf-8") as f: f.write(NEUTRON_SCRIPT)
-    cfg = dict(cfg)
-    cfg["out_spec"] = to_wsl(os.path.join(tmp, "spec.png")); cfg["out_map"]  = to_wsl(os.path.join(tmp, "map.png")); cfg["out_json"] = to_wsl(os.path.join(tmp, "res.json"))
-    cfg_json = json.dumps(cfg); wsl_script = to_wsl(script_path); wsl_dir = os.path.dirname(wsl_script)
-    inner = (f"export PROM_CFG='{cfg_json}'; source ~/.bashrc > /dev/null 2>&1; conda activate openmc && cd {wsl_dir} && python {wsl_script}")
-    log_cb(f"[WSL] запуск OpenMC: материал={cfg['material']}, R={cfg['radius']} см, E={cfg['energy_MeV']} МэВ")
-    log_cb("[WSL] подождите, первый запуск может занять минуту...")
     try:
-        proc = subprocess.run(["wsl", "bash", "-lc", inner], capture_output=True, text=True, timeout=3600)
-    except FileNotFoundError: raise RuntimeError("Команда 'wsl' не найдена.\nУбедись, что WSL установлен (wsl --install).")
-    if proc.stdout: log_cb(proc.stdout[-3000:])
-    if proc.returncode != 0 and proc.stderr: log_cb("[WSL stderr] " + proc.stderr[-1000:])
-    if "NEUTRON_DONE" not in (proc.stdout or ""): raise RuntimeError("OpenMC не завершился успешно.\n" + (proc.stderr or "")[-2000:])
-    res_path = os.path.join(tmp, "res.json")
-    with open(res_path, encoding="utf-8") as f: stats = json.load(f)
-    return {"spec_img": os.path.join(tmp, "spec.png"), "map_img":  os.path.join(tmp, "map.png"), "stats":    stats}
+        script_path = os.path.join(tmp, "neu.py")
+        with open(script_path, "w", encoding="utf-8") as f: f.write(NEUTRON_SCRIPT)
+        cfg = dict(cfg)
+        cfg["out_spec"] = to_wsl(os.path.join(tmp, "spec.png"))
+        cfg["out_map"]  = to_wsl(os.path.join(tmp, "map.png"))
+        cfg["out_json"] = to_wsl(os.path.join(tmp, "res.json"))
+        
+        cfg_json = json.dumps(cfg)
+        wsl_script = to_wsl(script_path)
+        wsl_dir = os.path.dirname(wsl_script)
+        
+        inner = (f"export PROM_CFG='{cfg_json}'; source ~/.bashrc > /dev/null 2>&1; "
+                 f"conda activate openmc && cd {wsl_dir} && python {wsl_script}")
+        log_cb(f"[WSL] запуск OpenMC: материал={cfg['material']}, R={cfg['radius']} см, E={cfg['energy_MeV']} МэВ")
+        log_cb("[WSL] подождите, первый запуск может занять минуту...")
+        
+        try:
+            proc = subprocess.run(["wsl", "bash", "-lc", inner], capture_output=True, text=True, timeout=3600)
+        except FileNotFoundError: 
+            raise RuntimeError("Команда 'wsl' не найдена.\nУбедись, что WSL установлен (wsl --install).")
+            
+        if proc.stdout: log_cb(proc.stdout[-3000:])
+        if proc.returncode != 0 and proc.stderr: log_cb("[WSL stderr] " + proc.stderr[-1000:])
+        if "NEUTRON_DONE" not in (proc.stdout or ""): 
+            raise RuntimeError("OpenMC не завершился успешно.\n" + (proc.stderr or "")[-2000:])
+            
+        res_path = os.path.join(tmp, "res.json")
+        with open(res_path, encoding="utf-8") as f: stats = json.load(f)
+        
+        return {"spec_img": os.path.join(tmp, "spec.png"),
+                "map_img":  os.path.join(tmp, "map.png"),
+                "stats":    stats}
+    except Exception:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
 
 # ЛОГИ
 _logger  = logging.getLogger("prometheus")

@@ -28,15 +28,6 @@ COMPOSITIONS = {
     "air_humid": {"N": 0.749, "O": 0.230, "Ar": 0.013, "H": 0.008},
 }
 
-# Словарь: какие новые материалы копировать из старых (если xraylib не дает данных)
-NEW_FROM_OLD = {
-    "seawater": "water",
-    "air_humid": "air",
-    "borated_polyethylene": "polyethylene",
-    "lead_glass": "glass",
-    "tungsten_alloy": "tungsten"
-}
-
 ELEMENTS = {
     "aluminum": "Al", "titanium": "Ti", "chromium": "Cr", "iron": "Fe",
     "steel": "Fe", "nickel": "Ni", "copper": "Cu", "zinc": "Zn",
@@ -53,7 +44,6 @@ NEW_PROPS = {
     "air_humid": {"Z": 7.6, "A": 14.5, "rho": 0.0012}
 }
 
-# Создаем заготовки для новых материалов
 for mat_name in COMPOSITIONS.keys():
     if mat_name not in data:
         data[mat_name] = {"v": False, "E": [], "mu": [], "mu_pe": [], "mu_comp": [], "mu_coh": [], "mu_pair": []}
@@ -62,7 +52,7 @@ for mat_name in COMPOSITIONS.keys():
 
 def get_mu_partial(mat_name, E_MeV):
     E_keV = E_MeV * 1000.0
-    mu_pe = mu_comp = mu_coh = 0.0
+    mu_pe = mu_comp = mu_coh = mu_pair = 0.0
 
     if mat_name in ELEMENTS:
         Z = xraylib.SymbolToAtomicNumber(ELEMENTS[mat_name])
@@ -72,9 +62,11 @@ def get_mu_partial(mat_name, E_MeV):
         except: pass
         try: mu_coh = xraylib.CS_Rayl(Z, E_keV)
         except: pass
+        try: mu_pair = xraylib.CS_Pair(Z, E_keV) + xraylib.CS_Triplet(Z, E_keV)
+        except: pass
     else:
         comp = COMPOSITIONS.get(mat_name)
-        if not comp: return 0, 0, 0
+        if not comp: return 0, 0, 0, 0
         for elem, weight in comp.items():
             Z = xraylib.SymbolToAtomicNumber(elem)
             try: mu_pe += weight * xraylib.CS_Photo(Z, E_keV)
@@ -83,60 +75,34 @@ def get_mu_partial(mat_name, E_MeV):
             except: pass
             try: mu_coh += weight * xraylib.CS_Rayl(Z, E_keV)
             except: pass
+            try: mu_pair += weight * (xraylib.CS_Pair(Z, E_keV) + xraylib.CS_Triplet(Z, E_keV))
+            except: pass
             
-    return mu_pe, mu_comp, mu_coh
+    return mu_pe, mu_comp, mu_coh, mu_pair
 
 for mat_name, mat_data in data.items():
     if mat_name.startswith("_"): continue
     
     if len(mat_data.get("E", [])) == 0:
         mat_data["E"] = [0.01, 0.015, 0.02, 0.03, 0.04, 0.05, 0.06, 0.08, 0.10, 0.15, 0.20, 0.30, 0.40, 0.50, 0.60, 0.80, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0]
-        mat_data["mu"] = [0.0] * len(mat_data["E"])
         
     E_list = mat_data["E"]
-    mu_total = mat_data["mu"]
     mu_pe_list, mu_comp_list, mu_coh_list, mu_pair_list = [], [], [], []
     mu_total_new = []
 
-    for i, (E, mu_t_old) in enumerate(zip(E_list, mu_total)):
-        pe, comp, coh = get_mu_partial(mat_name, E)
+    for E in E_list:
+        pe, comp, coh, pair = get_mu_partial(mat_name, E)
+        mu_t = pe + comp + coh + pair
         
-        mu_t = pe + comp + coh
         if mu_t <= 0:
-            # Если xraylib не дал данных (или это новый материал без данных),
-            # копируем из старого материала
-            if mat_name in NEW_FROM_OLD:
-                old_mat = data[NEW_FROM_OLD[mat_name]]
-                if i < len(old_mat["mu"]):
-                    mu_t = old_mat["mu"][i] * (mat_data.get("rho", 1.0) / old_mat.get("rho", 1.0))
-                else:
-                    mu_t = mu_t_old
-            else:
-                mu_t = mu_t_old
+            # Fallback если xraylib не дал данные (например, для новых материалов)
+            mu_t = mat_data.get("mu", [0]*len(E_list))[E_list.index(E)] if "mu" in mat_data and len(mat_data["mu"]) > E_list.index(E) else 0.0
             
         mu_total_new.append(mu_t)
-        
-        Z_val = mat_data.get("Z", 0)
-        pair_frac = 0.0
-        if E > 1.022 and Z_val > 30:
-            pair_frac = min(0.8, (E - 1.022) * 0.15)
-            
-        s_partial = pe + comp + coh
-        if s_partial > 0:
-            frac_pe = pe / s_partial
-            frac_comp = comp / s_partial
-            frac_coh = coh / s_partial
-            
-            mu_pe_list.append(mu_t * (1 - pair_frac) * frac_pe)
-            mu_comp_list.append(mu_t * (1 - pair_frac) * frac_comp)
-            mu_coh_list.append(mu_t * (1 - pair_frac) * frac_coh)
-            mu_pair_list.append(mu_t * pair_frac)
-        else:
-            # Если нет партиалов, все уходит в комптон
-            mu_pe_list.append(0.0)
-            mu_coh_list.append(0.0)
-            mu_comp_list.append(mu_t * (1 - pair_frac))
-            mu_pair_list.append(mu_t * pair_frac)
+        mu_pe_list.append(pe)
+        mu_comp_list.append(comp)
+        mu_coh_list.append(coh)
+        mu_pair_list.append(pair)
 
     mat_data["mu"] = mu_total_new
     mat_data["mu_pe"] = mu_pe_list
@@ -147,4 +113,4 @@ for mat_name, mat_data in data.items():
 
 with open("data/materials.json", "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, ensure_ascii=False)
-print("Готово! materials.json обновлён с точностью NIST.")
+print("Готово! materials.json обновлён.")

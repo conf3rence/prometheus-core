@@ -2,29 +2,91 @@ cff-version: 1.2.0
 message: "Если вы используете этот код в своей работе, пожалуйста, цитируйте его следующим образом."
 title: "Prometheus Core: Monte Carlo Simulation of Gamma, Charged Particles, and Neutrons"
 abstract: "Программный комплекс для симуляции переноса излучения с верификацией по NIST, ICRP и ENDF/B. Включает JIT-оптимизацию через Numba и мультипроцессинг."
+version: 3.0.0
+date-released: "2024-05-20" # Замени на реальную дату релиза
+repository-code: "https://github.com/conf3rence/prometheus-core"
+license: MIT
+
 authors:
   - family-names: "Костин"
     given-names: "Ярослав"
-license: MIT
+    # affiliation: "Название твоего вуза или организации" # Раскомментируй и впиши, если нужно
+
 references:
   - type: software
     title: "OpenMC"
-    authors: ["Romano, Paul K.", "Horelik, Nicholas E.", "Herman, Bryan R.", "Nelson, Adam G.", "Forget, Benoit", "Smith, Kord"]
+    authors:
+      - family-names: "Romano"
+        given-names: "Paul K."
+      - family-names: "Horelik"
+        given-names: "Nicholas E."
+      - family-names: "Herman"
+        given-names: "Bryan R."
+      - family-names: "Nelson"
+        given-names: "Adam G."
+      - family-names: "Forget"
+        given-names: "Benoit"
+      - family-names: "Smith"
+        given-names: "Kord"
     doi: "10.1016/j.anucene.2014.07.048"
+    version: "0.13.3"
+    
   - type: software
     title: "xraylib"
-    authors: ["Schoonjans, Tom", "Brunetti, Antonio", "Golosio, Bruno", "Sanchez del Rio, Manuel", "Solé, Vicente Armando", "Ferrero, Claudio", "Vincze, Laszlo"]
+    authors:
+      - family-names: "Schoonjans"
+        given-names: "Tom"
+      - family-names: "Brunetti"
+        given-names: "Antonio"
+      - family-names: "Golosio"
+        given-names: "Bruno"
+      - family-names: "Sanchez del Rio"
+        given-names: "Manuel"
+      - family-names: "Solé"
+        given-names: "Vicente Armando"
+      - family-names: "Ferrero"
+        given-names: "Claudio"
+      - family-names: "Vincze"
+        given-names: "Laszlo"
     doi: "10.1016/j.sab.2011.09.007"
-  - type: software
-    title: "Numba"
-    authors: ["Lam, Siu Kwan", "Pitrou, Antoine", "Seibert, Stanley"]
+    
+  - type: conference-paper
+    title: "Numba: A LLVM-based Python JIT Compiler"
+    authors:
+      - family-names: "Lam"
+        given-names: "Siu Kwan"
+      - family-names: "Pitrou"
+        given-names: "Antoine"
+      - family-names: "Seibert"
+        given-names: "Stanley"
     year: 2015
-    notes: "LLVM-based Python JIT Compiler"
+    collection-title: "Proceedings of the Second Workshop on the LLVM Compiler Infrastructure in HPC"
+    
   - type: dataset
     title: "NIST XCOM: Photon Cross Sections Database"
-    authors: ["Berger, M.J.", "Hubbell, J.H.", "Seltzer, S.M.", "Chang, J.", "Coursey, J.S.", "Sukumar, R.", "Zucker, D.S.", "Olsen, K."]
+    authors:
+      - family-names: "Berger"
+        given-names: "M.J."
+      - family-names: "Hubbell"
+        given-names: "J.H."
+      - family-names: "Seltzer"
+        given-names: "S.M."
+      - family-names: "Chang"
+        given-names: "J."
+      - family-names: "Coursey"
+        given-names: "J.S."
+      - family-names: "Sukumar"
+        given-names: "R."
+      - family-names: "Zucker"
+        given-names: "D.S."
+      - family-names: "Olsen"
+        given-names: "K."
     url: "https://physics.nist.gov/PhysRefData/Xcom/html/xcom1.html"
+    year: 2010
+    
   - type: report
     title: "ICRP Publication 74: Conversion Coefficients for use in Radiological Protection Against External Radiation"
-    authors: ["International Commission on Radiological Protection"]
+    authors:
+      - name: "International Commission on Radiological Protection"
     doi: "10.1016/S0146-6453(96)90010-X"
+    year: 1996

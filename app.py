@@ -1,8 +1,8 @@
 """app.py — GUI Prometheus Core v3"""
-import os, sys, json, datetime, base64
+import os, sys, json, base64
 import multiprocessing as mp
 from io import BytesIO
-os.environ.setdefault("QT_API","pyside6")
+os.environ.setdefault("QT_API", "pyside6")
 import numpy as np
 from PySide6 import QtCore, QtWidgets, QtGui
 import matplotlib
@@ -19,10 +19,16 @@ os.makedirs(OUT, exist_ok=True)
 def log(msg): P.plog(msg)
 
 def make_json_serializable(obj):
-    if isinstance(obj, np.ndarray): return obj.tolist()
-    elif isinstance(obj, (np.float64, np.float32)): return float(obj)
-    elif isinstance(obj, dict): return {k: make_json_serializable(v) for k, v in obj.items()}
-    elif isinstance(obj, list): return [make_json_serializable(v) for v in obj]
+    if isinstance(obj, np.ndarray): 
+        return obj.tolist()
+    elif isinstance(obj, (np.float64, np.float32, np.float16)): 
+        return float(obj)
+    elif isinstance(obj, (np.int64, np.int32, np.int16, np.int8)): 
+        return int(obj)
+    elif isinstance(obj, dict): 
+        return {k: make_json_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list): 
+        return [make_json_serializable(v) for v in obj]
     return obj
 
 def fig_to_base64(fig):
@@ -59,8 +65,10 @@ class GammaWorker(QtCore.QThread):
     def run(s):
         try:
             r=P.gamma_mc(**s.p, progress=lambda f:s.prog.emit(f), should_stop=lambda:s._stop)
-            s.done.emit(r)
-        except Exception as e: s.fail.emit(f"{type(e).__name__}: {e}")
+            if r is not None:
+                s.done.emit(r)
+        except Exception as e: 
+            s.fail.emit(f"{type(e).__name__}: {e}")
 
 class AttenuationWorker(QtCore.QThread):
     done=QtCore.Signal(list); fail=QtCore.Signal(str)
@@ -70,7 +78,8 @@ class AttenuationWorker(QtCore.QThread):
         try:
             res = P.attenuation_curve(s.mat, s.spec, s.n_hist, s.thick)
             s.done.emit(res)
-        except Exception as e: s.fail.emit(f"{type(e).__name__}: {e}")
+        except Exception as e: 
+            s.fail.emit(f"{type(e).__name__}: {e}")
 
 class NeutronWorker(QtCore.QThread):
     done=QtCore.Signal(dict); fail=QtCore.Signal(str); msg=QtCore.Signal(str)
@@ -78,6 +87,7 @@ class NeutronWorker(QtCore.QThread):
     def run(s):
         try: s.done.emit(P.run_neutrons_wsl(s.c, lambda m:s.msg.emit(m)))
         except Exception as e: s.fail.emit(f"{type(e).__name__}: {e}")
+
 
 class GammaTab(QtWidgets.QWidget):
     def __init__(s, console):
@@ -127,7 +137,7 @@ class GammaTab(QtWidgets.QWidget):
         s.btn.setToolTip("Запустить расчет (Ctrl+R)")
         
         s.btn_export = QtWidgets.QPushButton("💾 Экспорт отчета"); s.btn_export.clicked.connect(s.export_data)
-        s.btn_export.setToolTip("Экспорт результатов в HTML/JSON/CSV/TXT (Ctrl+E)")
+        s.btn_export.setToolTip("Экспорт результатов в HTML/JSON/CSV (Ctrl+E)")
         
         # --- ГРУППА ВИЗУАЛИЗАЦИЙ ---
         s.btn_viz = QtWidgets.QToolButton()
@@ -183,6 +193,10 @@ class GammaTab(QtWidgets.QWidget):
         s.btn.setEnabled(ok)
 
     def run(s):
+        if s.w and s.w.isRunning():
+            s.console("[ГАММА] Уже идёт расчёт, подождите или остановите.")
+            return
+            
         layers = []
         if s.cb_geom.currentText() == "Плоский слой":
             for i in range(3):
@@ -216,6 +230,17 @@ class GammaTab(QtWidgets.QWidget):
         s.console(f"  Бугер: теория={theor_escape:.4f}, модель={sim_escape:.4f}")
         if backscatter_pct > 0: s.console(f"  Обратное рассеяние: {backscatter_pct:.2f}%")
         
+        # --- АБСОЛЮТНАЯ ДОЗА ---
+        if s.chk_abs.isChecked():
+            abs_res = P.absolute_dose(
+                r, s.sp_act.value(), s.cb_au.currentText(),
+                s.sp_t.value(), s.cb_tu.currentText(),
+                True, s.cb_iso.currentText()
+            )
+            s.console(f"  Абсолютная доза: {abs_res['dose_abs']:.3e} Зв")
+            r.update(abs_res)
+        # -------------------------
+
         s.a1.clear(); s.a2.clear(); s.a3.clear(); s.a4.clear()
         if len(r["src"]): s.a1.hist(r["src"],bins=40,color="seagreen"); s.a1.set_title("Спектр источника")
         if len(r["leak"]): s.a2.hist(r["leak"],bins=50,color="steelblue"); s.a2.set_title("Спектр утечки")
@@ -244,7 +269,7 @@ class GammaTab(QtWidgets.QWidget):
         if not s.res or "theta_hist" not in s.res: return s.console("[ВИЗУАЛИЗАЦИЯ] Нет данных")
         fig = Figure(figsize=(8, 8), tight_layout=True); ax = fig.add_subplot(111, projection='polar')
         hist = s.res["theta_hist"]
-        cos_theta = np.linspace(-1, 1, len(hist))
+        cos_theta = (np.arange(90) + 0.5) / 45 - 1
         angles = np.arccos(cos_theta)
         ax.bar(angles, hist, width=np.pi/90, color="darkred", alpha=0.7)
         ax.set_title("Угловое распределение рассеянных фотонов (0° = вперед)")
@@ -253,6 +278,7 @@ class GammaTab(QtWidgets.QWidget):
         canvas.draw(); win.exec()
 
     def run_attenuation(s):
+        s.att_res = None # СБРОС СТАРОГО РЕЗУЛЬТАТА
         mat = P.make_gamma_mat(s.cb_mat.currentText())
         spec = P.ISOTOPES[s.cb_iso.currentText()]["lines"]
         thick = np.linspace(0, 20, 11)
@@ -294,7 +320,7 @@ class GammaTab(QtWidgets.QWidget):
                     img_coll = fig_to_base64(fig_c)
                 if "theta_hist" in s.res and s.res["theta_hist"].sum() > 0:
                     fig_p = Figure(figsize=(7, 7), tight_layout=True); ax_p = fig_p.add_subplot(111, projection='polar')
-                    cos_theta = np.linspace(-1, 1, len(s.res["theta_hist"])); angles = np.arccos(cos_theta)
+                    cos_theta = (np.arange(90) + 0.5) / 45 - 1; angles = np.arccos(cos_theta)
                     ax_p.bar(angles, s.res["theta_hist"], width=np.pi/90, color="darkred", alpha=0.7)
                     img_polar = fig_to_base64(fig_p)
                 if s.att_res is not None:
@@ -322,6 +348,7 @@ th {{ background-color: #2e7d32; color: white; }} img {{ max-width: 100%; border
             s.console(f"[ЭКСПОРТ] Сохранено в {path}")
         except Exception as e: s.console(f"[ЭКСПОРТ] ОШИБКА: {e}")
 
+
 class ChargedTab(QtWidgets.QWidget):
     def __init__(s, console):
         super().__init__(); s.console=console; s.res=None
@@ -346,7 +373,14 @@ class ChargedTab(QtWidgets.QWidget):
     def run(s):
         pt=s.cb_p.currentText(); mat=P.CP_MAT[s.cb_m.currentText()]; T0=s.sp_E.value(); R,dep,de=P.csda(pt,T0,mat)
         wr = {"протон": 2.0, "альфа": 20.0, "дейтрон": 2.0, "электрон": 1.0}.get(pt, 1.0)
-        s.console(f"[ЗАРЯЖ] {pt} {T0}МэВ в {s.cb_m.currentText()}: dE/dx={P.sp_heavy(T0,*P.PARTICLES[pt],mat):.4g}МэВ/см, пробег={R:.4g}см (wR={wr:.0f})")
+        
+        # ИСПРАВЛЕНИЕ: Для электрона используем sp_elec
+        if pt == "электрон":
+            dE_dx = P.sp_elec(T0, mat)[0]
+        else:
+            dE_dx = P.sp_heavy(T0, *P.PARTICLES[pt], mat)
+            
+        s.console(f"[ЗАРЯЖ] {pt} {T0}МэВ в {s.cb_m.currentText()}: dE/dx={dE_dx:.4g}МэВ/см, пробег={R:.4g}см (wR={wr:.0f})")
         if not s.chk_overlay.isChecked(): s.a1.clear(); s.a2.clear()
         color = {"протон": "crimson", "альфа": "darkgreen", "электрон": "blue", "дейтрон": "purple"}.get(pt, "black")
         s.a1.plot(dep,de,color=color,lw=2,label=f"{pt} {T0}МэВ"); s.a1.legend()
@@ -354,6 +388,7 @@ class ChargedTab(QtWidgets.QWidget):
         s.canvas.draw()
         
     def clear_plots(s): s.a1.clear(); s.a2.clear(); s.canvas.draw()
+
 
 class NeutronTab(QtWidgets.QWidget):
     def __init__(s, console):
@@ -370,10 +405,16 @@ class NeutronTab(QtWidgets.QWidget):
         fl.addRow(s.btn); root.addWidget(p)
         s.fig=Figure(figsize=(10,8),tight_layout=True); s.a1=s.fig.add_subplot(211); s.a2=s.fig.add_subplot(212); s.canvas=FigureCanvas(s.fig)
         g=QtWidgets.QWidget(); gl=QtWidgets.QVBoxLayout(g); gl.addWidget(NavToolbar(s.canvas,s)); gl.addWidget(s.canvas); root.addWidget(g,1)
+    
     def run(s):
-        cfg={"material":s.cb_m.currentText(),"radius":s.sp_R.value(),"energy_MeV":s.sp_E.value(),"particles":s.sp_n.value(),"batches":s.sp_b.value(),"mesh_n":80}
+        if s.w and s.w.isRunning():
+            s.console("[НЕЙТРОНЫ] Уже идёт расчёт.")
+            return
+        cfg={"material":s.cb_m.currentText(),"radius":s.sp_R.value(),"energy_MeV":
+             s.sp_E.value(),"particles":s.sp_n.value(),"batches":s.sp_b.value(),"mesh_n":80}
         s.btn.setEnabled(False); s.console("[НЕЙТРОНЫ] запуск...")
         s.w=NeutronWorker(cfg); s.w.msg.connect(s.console); s.w.done.connect(s.ok); s.w.fail.connect(lambda m: s.console("[ОШИБКА] "+m)); s.w.start()
+        
     def ok(s,r):
         s.btn.setEnabled(True); st=r["stats"]; s.console(f"[НЕЙТРОНЫ] рассеяние={st['scatter']:.4e} поглощение={st['absorption']:.4e}")
         import matplotlib.image as mpimg
@@ -410,12 +451,11 @@ class HotkeysDialog(QtWidgets.QDialog):
 class Main(QtWidgets.QMainWindow):
     def __init__(s):
         super().__init__()
-        s.setWindowTitle("Prometheus Core v3.0 (Full HD)")
+        s.setWindowTitle("Prometheus Core v3.0")
         s.setWindowIcon(make_app_icon())
-        s.resize(1920, 1080)
+        s.resize(1280, 800)
         s.dark_mode = True
         
-        # Меню
         menubar = s.menuBar()
         file_menu = menubar.addMenu("Файл")
         act_save = QtGui.QAction("Сохранить проект (Ctrl+S)", s); act_save.triggered.connect(s.save_session); file_menu.addAction(act_save)
@@ -429,7 +469,6 @@ class Main(QtWidgets.QMainWindow):
         help_menu = menubar.addMenu("Справка")
         act_hotkeys = QtGui.QAction("Горячие клавиши (F1)", s); act_hotkeys.triggered.connect(s.show_hotkeys); help_menu.addAction(act_hotkeys)
 
-        # Консоль
         s.con=QtWidgets.QPlainTextEdit(); s.con.setReadOnly(True); s.con.setMaximumHeight(200)
         s.con.setStyleSheet("font-family:Consolas;font-size:12px;background:#1e1e1e;color:#d4d4d4;")
         P.attach_log_widget(s.con); P.setup_log_file(OUT)
@@ -438,17 +477,18 @@ class Main(QtWidgets.QMainWindow):
         s.gtab = GammaTab(console); s.ctab = ChargedTab(console); s.ntab = NeutronTab(console)
         
         tabs=QtWidgets.QTabWidget()
-        tabs.addTab(s.gtab,"☢️ Гамма"); tabs.addTab(s.ctab,"⚛️ Заряженные"); tabs.addTab(s.ntab,"🔬 Нейтроны")
-        tabl=s._mat_table(); tabs.addTab(tabl,"📋 Таблица материалов")
+        tabs.addTab(s.gtab,"☢️ Гамма")
+        tabs.addTab(s.ctab,"⚙️ Заряженные")
+        tabs.addTab(s.ntab,"🔬 Нейтроны")
+        tabl=s._mat_table()
+        tabs.addTab(tabl,"📋 Таблица материалов")
         
         c=QtWidgets.QWidget(); v=QtWidgets.QVBoxLayout(c); v.addWidget(tabs,1); v.addWidget(QtWidgets.QLabel("ЛОГ:")); v.addWidget(s.con)
         s.setCentralWidget(c)
         
-        # Статус-бар
         s.status = s.statusBar()
         s.status.showMessage(f"Готово | Материалов: {len(P.GAMMA_MATS)} | Изотопов: {len(P.ISOTOPES)}")
         
-        # Горячие клавиши
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+R"), s, activated=s.run_active_tab)
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+E"), s, activated=s.export_active_tab)
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+S"), s, activated=s.save_session)
@@ -456,7 +496,7 @@ class Main(QtWidgets.QMainWindow):
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+T"), s, activated=s.toggle_theme)
         QtGui.QShortcut(QtGui.QKeySequence("F1"), s, activated=s.show_hotkeys)
         
-        s.tabs = tabs  # сохраняем ссылку для run_active_tab
+        s.tabs = tabs
 
     def run_active_tab(s):
         idx = s.tabs.currentIndex()
@@ -497,17 +537,20 @@ class Main(QtWidgets.QMainWindow):
     def load_session(s):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(s, "Загрузить", "", "JSON (*.json)")
         if not path: return
-        with open(path, "r", encoding="utf-8") as f: data = json.load(f)
-        if "gamma" in data:
-            g = data["gamma"]
-            s.gtab.cb_geom.setCurrentText(g.get("geom", "Сфера")); s.gtab.cb_mat.setCurrentText(g.get("mat", "air"))
-            s.gtab.cb_iso.setCurrentText(g.get("iso", "Am-241")); s.gtab.sp_R.setValue(g.get("R", 10)); s.gtab.sp_n.setValue(g.get("N", 100000))
-            if "layers" in g:
-                for i, (m, t) in enumerate(g["layers"]):
-                    s.gtab.tbl_layers.cellWidget(i, 0).setCurrentText(m); s.gtab.tbl_layers.cellWidget(i, 1).setValue(t)
-        if "charged" in data:
-            c = data["charged"]; s.ctab.cb_p.setCurrentText(c.get("pt", "протон")); s.ctab.cb_m.setCurrentText(c.get("mat", "вода")); s.ctab.sp_E.setValue(c.get("E", 100))
-        P.plog(f"[СЕССИЯ] Загружено из {path}")
+        try:
+            with open(path, "r", encoding="utf-8") as f: data = json.load(f)
+            if "gamma" in data:
+                g = data["gamma"]
+                s.gtab.cb_geom.setCurrentText(g.get("geom", "Сфера")); s.gtab.cb_mat.setCurrentText(g.get("mat", "air"))
+                s.gtab.cb_iso.setCurrentText(g.get("iso", "Am-241")); s.gtab.sp_R.setValue(g.get("R", 10)); s.gtab.sp_n.setValue(g.get("N", 100000))
+                if "layers" in g:
+                    for i, (m, t) in enumerate(g["layers"]):
+                        s.gtab.tbl_layers.cellWidget(i, 0).setCurrentText(m); s.gtab.tbl_layers.cellWidget(i, 1).setValue(t)
+            if "charged" in data:
+                c = data["charged"]; s.ctab.cb_p.setCurrentText(c.get("pt", "протон")); s.ctab.cb_m.setCurrentText(c.get("mat", "вода")); s.ctab.sp_E.setValue(c.get("E", 100))
+            P.plog(f"[СЕССИЯ] Загружено из {path}")
+        except Exception as e:
+            P.plog(f"[СЕССИЯ] Ошибка загрузки: {e}")
 
     def _mat_table(s):
         t=QtWidgets.QTableWidget(); t.setColumnCount(5)
@@ -518,6 +561,13 @@ class Main(QtWidgets.QMainWindow):
             for j,v in enumerate([n,f"{m.Z:g}",f"{m.A:g}",f"{m.density:g}",f"{m.mu_rho(1.0):.4g}"]):
                 it=QtWidgets.QTableWidgetItem(v); t.setItem(i,j,it)
         t.resizeColumnsToContents(); return t
+
+    def closeEvent(s, event):
+        for w in [getattr(s.gtab, "w", None), getattr(s.gtab, "w_att", None), getattr(s.ntab, "w", None)]:
+            if w and hasattr(w, 'isRunning') and w.isRunning():
+                if hasattr(w, 'stop'): w.stop()
+                w.wait(2000)
+        event.accept()
 
 def main():
     app=QtWidgets.QApplication(sys.argv); app.setStyle("Fusion")
