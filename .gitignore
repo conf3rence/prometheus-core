@@ -25,3 +25,7 @@ output/
 .DS_Store
 Thumbs.db
 *.zip
+PrometheusCore*/
+PrometheusCore-Lite*/
+PrometheusCore-Dev*/
+*.exe

@@ -1,5 +1,5 @@
 """app.py — GUI Prometheus Core v3"""
-import os, sys, json, base64
+import os, sys, json, base64, time
 import multiprocessing as mp
 from io import BytesIO
 os.environ.setdefault("QT_API", "pyside6")
@@ -12,6 +12,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavToolbar
 from matplotlib.colors import LogNorm
 import physics as P
+import validator
 
 OUT = P.OUT_DIR
 os.makedirs(OUT, exist_ok=True)
@@ -47,7 +48,70 @@ def make_app_icon():
     return QtGui.QIcon(pixmap)
 
 # ==========================================
-# НОВОЕ ОКНО ДЛЯ РАЗВОРОТА ГРАФИКОВ (ЗУМ + ПАНОРАМИРОВАНИЕ)
+# 1D-СРЕЗ (LINE PROFILE)
+# ==========================================
+class SliceDialog(QtWidgets.QDialog):
+    def __init__(self, g2, R, geom, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("1D Срез (Линейный профиль)")
+        self.resize(800, 700)
+        
+        layout = QtWidgets.QVBoxLayout(self)
+        self.fig = Figure(figsize=(8, 7), tight_layout=True)
+        self.canvas = FigureCanvas(self.fig)
+        
+        self.ax_map = self.fig.add_subplot(211)
+        self.ax_slice = self.fig.add_subplot(212)
+        
+        pos = g2[g2 > 0]
+        vmin = pos.min() if pos.size else 1e-12
+        self.g2_disp = g2.copy()
+        self.g2_disp[self.g2_disp <= 0] = vmin
+        
+        if geom == "slab":
+            extent = [0, R, -R, R]
+            self.ax_map.set_xlabel("X (глубина), см")
+        else:
+            extent = [-R, R, -R, R]
+            self.ax_map.set_xlabel("X, см")
+            
+        self.im = self.ax_map.imshow(self.g2_disp, origin="lower", extent=extent, cmap="inferno", norm=LogNorm(vmin=vmin), interpolation='nearest')
+        self.ax_map.set_title("2D Карта (двигай ползунок, чтобы выбрать срез)")
+        
+        self.ny, self.nx = g2.shape
+        self.y_center = self.ny // 2
+        self.red_line = self.ax_map.axhline(y=extent[2] + (self.y_center / self.ny) * (extent[3] - extent[2]), color='red', lw=2)
+        
+        layout.addWidget(self.canvas)
+        
+        self.slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.slider.setRange(0, self.ny - 1)
+        self.slider.setValue(self.y_center)
+        self.slider.valueChanged.connect(self.update_slice)
+        layout.addWidget(QtWidgets.QLabel("Позиция среза (ось Y/Z):"))
+        layout.addWidget(self.slider)
+        
+        self.update_slice(self.y_center)
+
+    def update_slice(self, val):
+        y_pos = self.ax_map.get_ylim()[0] + (val / self.ny) * (self.ax_map.get_ylim()[1] - self.ax_map.get_ylim()[0])
+        self.red_line.set_ydata([y_pos, y_pos])
+        
+        self.ax_slice.clear()
+        slice_data = self.g2_disp[val, :]
+        x_axis = np.linspace(self.ax_map.get_xlim()[0], self.ax_map.get_xlim()[1], len(slice_data))
+        
+        self.ax_slice.plot(x_axis, slice_data, color="cyan", lw=2)
+        self.ax_slice.set_yscale("log")
+        self.ax_slice.set_title(f"Профиль вдоль оси X (срез Y={val})")
+        self.ax_slice.set_xlabel("Координата X, см")
+        self.ax_slice.set_ylabel("Интенсивность (лог. шкала)")
+        self.ax_slice.grid(alpha=0.3)
+        
+        self.canvas.draw_idle()
+
+# ==========================================
+# ОКНО ДЛЯ РАЗВОРОТА ГРАФИКОВ (ЗУМ + ПАНОРАМИРОВАНИЕ)
 # ==========================================
 class PopOutDialog(QtWidgets.QDialog):
     def __init__(self, fig, title="Визуализация", parent=None):
@@ -58,7 +122,6 @@ class PopOutDialog(QtWidgets.QDialog):
         self.fig = fig
         self.original_canvas = parent.canvas if parent and hasattr(parent, 'canvas') else None
         
-        # ЗАПОМИНАЕМ ИСХОДНЫЕ ГРАНИЦЫ ВСЕХ ГРАФИКОВ
         self.original_limits = []
         for ax in self.fig.axes:
             self.original_limits.append((ax.get_xlim(), ax.get_ylim()))
@@ -80,7 +143,6 @@ class PopOutDialog(QtWidgets.QDialog):
         self.cid_motion = self.canvas.mpl_connect('motion_notify_event', self.on_motion)
         self.cid_release = self.canvas.mpl_connect('button_release_event', self.on_release)
         
-        # Принудительно растягиваем фигуру под размеры всплывающего окна
         self.fig.set_size_inches(self.canvas.width() / self.fig.dpi, self.canvas.height() / self.fig.dpi)
         self.fig.tight_layout()
         self.canvas.draw()
@@ -157,23 +219,18 @@ class PopOutDialog(QtWidgets.QDialog):
             
             if self.original_canvas:
                 self.fig.set_canvas(self.original_canvas)
-                
-                # Возвращаем исходные размеры окна
                 w = self.original_canvas.width()
                 h = self.original_canvas.height()
                 if w > 0 and h > 0:
                     self.fig.set_size_inches(w / self.fig.dpi, h / self.fig.dpi)
-                
                 self.fig.tight_layout()
                 
-                # ВОЗВРАЩАЕМ ГРАНИЦЫ ГРАФИКОВ ОБРАТНО (чтобы они не пропадали)
                 for ax, (xlim, ylim) in zip(self.fig.axes, self.original_limits):
                     ax.set_xlim(xlim)
                     ax.set_ylim(ylim)
-                    
                 self.original_canvas.draw()
-        except Exception as e:
-            print(f"Ошибка при возврате графика: {e}")
+        except Exception:
+            pass
         super().closeEvent(event)
 
 # ==========================================
@@ -182,7 +239,7 @@ class PopOutDialog(QtWidgets.QDialog):
 class SelectorDialog(QtWidgets.QDialog):
     def __init__(s, title, data_dict, item_type, parent=None):
         super().__init__(parent)
-        s.setWindowTitle(title); s.resize(700, 500)
+        s.setWindowTitle(title); s.resize(700, 550)
         s.data_dict = data_dict; s.item_type = item_type
         
         layout = QtWidgets.QHBoxLayout(s)
@@ -191,6 +248,8 @@ class SelectorDialog(QtWidgets.QDialog):
         s.search.textChanged.connect(s.filter_list); left_layout.addWidget(s.search)
         
         s.list_widget = QtWidgets.QListWidget()
+        s.list_widget.itemDoubleClicked.connect(s.accept)  # <--- ДВОЙНОЙ КЛИК ДЛЯ ВЫБОРА
+        
         for k in sorted(data_dict.keys()):
             if k.startswith("_"): continue
             s.list_widget.addItem(k)
@@ -241,8 +300,12 @@ class GammaWorker(QtCore.QThread):
     def stop(s): s._stop=True
     def run(s):
         try:
+            t_start = time.perf_counter()
             r=P.gamma_mc(**s.p, progress=lambda f:s.prog.emit(f), should_stop=lambda:s._stop)
-            if r is not None: s.done.emit(r)
+            t_end = time.perf_counter()
+            if r is not None:
+                r["elapsed_time"] = t_end - t_start
+                s.done.emit(r)
         except Exception as e: s.fail.emit(f"{type(e).__name__}: {e}")
 
 class AttenuationWorker(QtCore.QThread):
@@ -317,6 +380,7 @@ class GammaTab(QtWidgets.QWidget):
         menu.addAction("📊 Гистограмма столкновений").triggered.connect(s.show_coll_hist)
         menu.addAction("📐 Угловое распределение").triggered.connect(s.show_polar_hist)
         menu.addAction("📉 Кривая ослабления").triggered.connect(s.run_attenuation)
+        menu.addAction("📏 1D-срез (Line Profile)").triggered.connect(s.show_slice)
         s.btn_viz.setMenu(menu)
         
         s.sp_n.valueChanged.connect(s.validate); s.sp_R.valueChanged.connect(s.validate)
@@ -403,7 +467,12 @@ class GammaTab(QtWidgets.QWidget):
         theor_escape = r.get("theor_escape", np.exp(-r["mu"] * r["R"]))
         sim_escape = r["nlk_uncoll"] / r["n"] if r["n"] > 0 else 0.0
         backscatter_pct = (r.get("backscatter_count", 0) / r["n"]) * 100 if r["n"] > 0 else 0.0
+        
         s.console(f"[ГАММА] готово: доза={r['dose']:.3e} Гр/ч-ца | фото/комптон/пары={r['nph']}/{r['nco']}/{r['npa']}")
+        
+        if "elapsed_time" in r:
+            s.console(f"  [ВРЕМЯ] Расчет и компиляция Numba заняли: {r['elapsed_time']:.3f} сек")
+            
         s.console(f"  Бугер: теория={theor_escape:.4f}, модель={sim_escape:.4f}")
         if backscatter_pct > 0: s.console(f"  Обратное рассеяние: {backscatter_pct:.2f}%")
         
@@ -434,6 +503,12 @@ class GammaTab(QtWidgets.QWidget):
         win = QtWidgets.QDialog(s); win.setWindowTitle("Гистограмма"); win.resize(800, 600)
         canvas = FigureCanvas(fig); layout = QtWidgets.QVBoxLayout(win); layout.addWidget(canvas); canvas.draw(); win.exec()
 
+    def show_slice(s):
+        if not s.res or "grid" not in s.res: 
+            return s.console("[ВИЗУАЛИЗАЦИЯ] Сначала выполните расчет!")
+        dlg = SliceDialog(s.res["grid"], s.res["R"], s.res["geom"], s)
+        dlg.exec()
+
     def show_polar_hist(s):
         if not s.res or "theta_hist" not in s.res: return s.console("[ВИЗУАЛИЗАЦИЯ] Нет данных")
         fig = Figure(figsize=(8, 8), tight_layout=True); ax = fig.add_subplot(111, projection='polar')
@@ -461,12 +536,17 @@ class GammaTab(QtWidgets.QWidget):
 
     def export_data(s):
         if not s.res: return s.console("[ЭКСПОРТ] Нет данных!")
-        path, _ = QtWidgets.QFileDialog.getSaveFileName(s, "Сохранить", "report", "HTML (*.html);;JSON (*.json);;CSV (*.csv)")
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(s, "Сохранить", "report", "HTML (*.html);;JSON (*.json);;CSV (*.csv);;NumPy Matrix (*.npy)")
         if not path: return
         try:
-            if path.endswith('.csv'): np.savetxt(path, np.column_stack((s.res["r"], s.res["rad_dose"])), delimiter=";", header="r;dose")
+            if path.endswith('.csv'): 
+                np.savetxt(path, np.column_stack((s.res["r"], s.res["rad_dose"])), delimiter=";", header="r;dose")
+            elif path.endswith('.npy'):
+                np.save(path, s.res["grid"])
+                s.console(f"[ЭКСПОРТ] Матрица 2D-карты сохранена в формате NumPy (.npy)")
             elif path.endswith('.json'):
-                with open(path, "w", encoding="utf-8") as f: json.dump(make_json_serializable(s.res), f)
+                with open(path, "w", encoding="utf-8") as f: 
+                    json.dump(make_json_serializable(s.res), f)
             elif path.endswith('.html'):
                 img_main = fig_to_base64(s.fig); img_coll = img_polar = img_att = None
                 if "coll_hist" in s.res and s.res["coll_hist"].sum() > 0:
@@ -689,14 +769,18 @@ class HotkeysDialog(QtWidgets.QDialog):
 class Main(QtWidgets.QMainWindow):
     def __init__(s):
         super().__init__()
-        s.setWindowTitle("Prometheus Core v3.0"); s.setWindowIcon(make_app_icon()); s.dark_mode = True
+        s.setWindowTitle("Prometheus Core v3.1.0 (Dev)"); s.setWindowIcon(make_app_icon()); s.dark_mode = True
         
         menubar = s.menuBar(); file_menu = menubar.addMenu("Файл")
         act_save = QtGui.QAction("Сохранить проект (Ctrl+S)", s); act_save.triggered.connect(s.save_session); file_menu.addAction(act_save)
         act_load = QtGui.QAction("Загрузить проект (Ctrl+O)", s); act_load.triggered.connect(s.load_session); file_menu.addAction(act_load)
         file_menu.addSeparator(); act_exit = QtGui.QAction("Выход", s); act_exit.triggered.connect(s.close); file_menu.addAction(act_exit)
         view_menu = menubar.addMenu("Вид"); act_theme = QtGui.QAction("Сменить тему (Ctrl+T)", s); act_theme.triggered.connect(s.toggle_theme); view_menu.addAction(act_theme)
-        help_menu = menubar.addMenu("Справка"); act_hotkeys = QtGui.QAction("Горячие клавиши (F1)", s); act_hotkeys.triggered.connect(s.show_hotkeys); help_menu.addAction(act_hotkeys)
+        
+        help_menu = menubar.addMenu("Справка")
+        act_hotkeys = QtGui.QAction("Горячие клавиши (F1)", s); act_hotkeys.triggered.connect(s.show_hotkeys); help_menu.addAction(act_hotkeys)
+        help_menu.addSeparator()
+        act_val = QtGui.QAction("Запустить верификацию NIST", s); act_val.triggered.connect(s.run_validation); help_menu.addAction(act_val)
 
         s.con=QtWidgets.QPlainTextEdit(); s.con.setReadOnly(True); s.con.setMaximumHeight(200)
         s.con.setStyleSheet("font-family:Consolas;font-size:12px;background:#1e1e1e;color:#d4d4d4;")
@@ -724,13 +808,22 @@ class Main(QtWidgets.QMainWindow):
         idx = s.tabs.currentIndex()
         if idx == 0: s.gtab.run()
         elif idx == 1: s.ctab.run()
-        elif idx == 2 : s.ntab.run()
+        elif idx == 2: s.ntab.run()
 
     def export_active_tab(s):
         if s.tabs.currentIndex() == 0: s.gtab.export_data()
         else: P.plog("[ЭКСПОРТ] Экспорт доступен только для вкладки 'Гамма'")
 
     def show_hotkeys(s): HotkeysDialog(s).exec()
+
+    def run_validation(s):
+        report = validator.run_validation(log_cb=lambda msg, level="info": P.plog(msg, level))
+        dlg = QtWidgets.QDialog(s); dlg.setWindowTitle("Отчет о верификации NIST"); dlg.resize(800, 500)
+        layout = QtWidgets.QVBoxLayout(dlg)
+        text = QtWidgets.QPlainTextEdit(); text.setPlainText(report); text.setReadOnly(True); text.setStyleSheet("font-family: Consolas; font-size: 13px;")
+        layout.addWidget(text)
+        btn = QtWidgets.QPushButton("Закрыть"); btn.clicked.connect(dlg.accept); layout.addWidget(btn)
+        dlg.exec()
 
     def toggle_theme(s):
         s.dark_mode = not s.dark_mode; app = QtWidgets.QApplication.instance()
@@ -788,7 +881,6 @@ class Main(QtWidgets.QMainWindow):
         t.resizeColumnsToContents(); return t
 
     def closeEvent(s, event):
-        # Отключаем графику перед закрытием главного окна
         for tab in [s.gtab, s.ctab, s.ntab]:
             try:
                 if hasattr(tab, 'canvas') and hasattr(tab, 'toolbar_g'):
@@ -798,7 +890,6 @@ class Main(QtWidgets.QMainWindow):
             except Exception:
                 pass
 
-        # Останавливаем фоновые потоки
         for w in [getattr(s.gtab, "w", None), getattr(s.gtab, "w_att", None), getattr(s.ntab, "w", None), getattr(s.ctab, "w_str", None)]:
             if w and hasattr(w, 'isRunning') and w.isRunning():
                 if hasattr(w, 'stop'): w.stop()
