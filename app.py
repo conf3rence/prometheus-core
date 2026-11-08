@@ -724,7 +724,7 @@ class Main(QtWidgets.QMainWindow):
         idx = s.tabs.currentIndex()
         if idx == 0: s.gtab.run()
         elif idx == 1: s.ctab.run()
-        elif idx == 2: s.ntab.run()
+        elif idx == 2 : s.ntab.run()
 
     def export_active_tab(s):
         if s.tabs.currentIndex() == 0: s.gtab.export_data()
