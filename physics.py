@@ -43,20 +43,31 @@ ACTIVITY_U = {"Бк":1.0,"кБк":1e3,"МБк":1e6,"ГБк":1e9,"мКи":3.7e7,"
 TIME_U     = {"с":1.0,"мин":60.0,"ч":3600.0,"сут":86400.0,"год":_Y}
 
 CP_MAT = {
-    "вода":{"Z":7.42, "A":18.015,"rho":1.0,"I":75.0,"ZA":0.5551},
-    "воздух":     {"Z":7.64, "A":14.4,  "rho":0.001205, "I":85.7},
-    "ткань":      {"Z":7.5,  "A":18.0,  "rho":1.06,     "I":74.9},
-    "кость":      {"Z":13.8, "A":28.0,  "rho":1.92,     "I":91.9},
-    "алюминий":   {"Z":13,   "A":26.98, "rho":2.70,     "I":166.0},
-    "кремний":    {"Z":14,   "A":28.09, "rho":2.33,     "I":173.0},
-    "железо":     {"Z":26,   "A":55.845,"rho":7.874,    "I":286.0},
-    "медь":       {"Z":29,   "A":63.55, "rho":8.96,"I":322.0},
-    "вольфрам":   {"Z":74,   "A":183.84,"rho":19.30,    "I":727.0},
-    "свинец":     {"Z":82,   "A":207.2, "rho":11.35,    "I":823.0},
-    "уран":       {"Z":92,   "A":238.03,"rho":18.95,    "I":890.0},
-    "полиэтилен": {"Z":5.53, "A":13.0,  "rho":0.94,     "I":57.4},
-    "графит":     {"Z":6,    "A":12.011,"rho":1.70,     "I":78.0},
-    "бетон":      {"Z":11.0, "A":22.0,  "rho":2.30,     "I":135.0},
+    "вода": {"Z": 7.42, "A": 18.015, "rho": 1.0, "I": 75.0, "ZA": 0.5551},
+    "воздух": {"Z": 7.64, "A": 14.4, "rho": 0.001205, "I": 85.7},
+    "ткань": {"Z": 7.5, "A": 18.0, "rho": 1.06, "I": 74.9},
+    "кость": {"Z": 13.8, "A": 28.0, "rho": 1.92, "I": 91.9},
+    "мышца": {"Z": 7.4, "A": 17.0, "rho": 1.04, "I": 74.0},
+    "кожа": {"Z": 7.3, "A": 16.0, "rho": 1.09, "I": 72.0},
+    "алюминий": {"Z": 13, "A": 26.98, "rho": 2.70, "I": 166.0},
+    "кремний": {"Z": 14, "A": 28.09, "rho": 2.33, "I": 173.0},
+    "титан": {"Z": 22, "A": 47.87, "rho": 4.54, "I": 233.0},
+    "железо": {"Z": 26, "A": 55.845, "rho": 7.874, "I": 286.0},
+    "сталь": {"Z": 26, "A": 55.8, "rho": 7.85, "I": 286.0},
+    "медь": {"Z": 29, "A": 63.55, "rho": 8.96, "I": 322.0},
+    "цинк": {"Z": 30, "A": 65.38, "rho": 7.14, "I": 330.0},
+    "серебро": {"Z": 47, "A": 107.87, "rho": 10.49, "I": 470.0},
+    "вольфрам": {"Z": 74, "A": 183.84, "rho": 19.30, "I": 727.0},
+    "золото": {"Z": 79, "A": 196.97, "rho": 19.32, "I": 790.0},
+    "свинец": {"Z": 82, "A": 207.2, "rho": 11.35, "I": 823.0},
+    "уран": {"Z": 92, "A": 238.03, "rho": 18.95, "I": 890.0},
+    "полиэтилен": {"Z": 5.53, "A": 13.0, "rho": 0.94, "I": 57.4},
+    "графит": {"Z": 6, "A": 12.011, "rho": 1.70, "I": 78.0},
+    "бетон": {"Z": 11.0, "A": 22.0, "rho": 2.30, "I": 135.0},
+    "литий": {"Z": 3, "A": 6.94, "rho": 0.534, "I": 40.0},
+    "бериллий": {"Z": 4, "A": 9.012, "rho": 1.85, "I": 63.7},
+    "бор": {"Z": 5, "A": 10.81, "rho": 2.34, "I": 76.0},
+    "боркарбид": {"Z": 5.3, "A": 11.2, "rho": 2.52, "I": 78.0},
 }
 PARTICLES = {"протон": (MP,1), "альфа": (MALPHA, 2), "дейтрон": (2*MP, 1), "электрон": (ME, 1)}
 
@@ -443,7 +454,6 @@ def range_vs_energy(part, mat, nE=60, seed=None):
     Es = np.linspace(Emin, Emax, nE)
     return Es, np.array([csda(part, e, mat, nstep=800, seed=seed)[0] for e in Es])
 
-# ---------------------------------------------------------------------------
 #  НЕЙТРОНЫ — мост в WSL (запускает OpenMC в Linux)
 NEUTRON_SCRIPT = r'''
 import os, json
@@ -534,6 +544,14 @@ tg = openmc.Tally(name="glob")
 tg.scores = ["absorption","fission","scatter","(n,gamma)"]
 tals.append(tg)
 
+# --- Многогрупповой анализ (Тепловые, Резонансные, Быстрые) ---
+# 0 - 0.625 эВ (тепловые), 0.625 - 100 кэВ (резонансные), > 100 кэВ (быстрые)
+group_bins = [0.0, 0.625, 100000.0, 20000000.0] 
+gf = openmc.EnergyFilter(group_bins)
+tgrp = openmc.Tally(name="groups")
+tgrp.filters = [gf]; tgrp.scores = ["flux", "absorption", "fission"]
+tals.append(tgrp)
+
 model = openmc.Model(geom, materials, st, tals)
 sp_path = model.run(output=True)
 
@@ -546,6 +564,34 @@ with openmc.StatePoint(sp_path) as sp:
         return float(r[0]) if len(r) else 0.0
     absb = gv("absorption"); fiss = gv("fission")
     scat = gv("scatter");ng   = gv("(n,gamma)")
+    
+    # РАСЧЕТ ДОЗЫ ЧЕРЕЗ КОЭФФИЦИЕНТЫ (OpenMC 0.15.3)
+    # Добавляем расчет ec здесь, чтобы он был доступен для дозы
+    ec = np.sqrt(ebins[:-1]*ebins[1:])
+    
+    # РАСЧЕТ ДОЗЫ ЧЕРЕЗ КОЭФФИЦИЕНТЫ (OpenMC >= 0.15.3)
+    try:
+        # Получаем энергии (в эВ) и коэффициенты (в пЗв·см²) для нейтронов
+        dose_energies, dose_coeffs = openmc.data.dose_coefficients(particle='neutron', geometry='AP', data_source='icrp74')
+        
+        # Интерполируем коэффициенты на наш энергетический спектр (ec - это середины бинов)
+        interp_coeffs = np.interp(ec, dose_energies, dose_coeffs) / 1e12
+        
+        # Считаем дозу: сумма (поток * коэффициент)
+        # Поток из OpenMC уже проинтегрирован по бину, поэтому умножать на ширину не нужно
+        dose_val = float(np.sum(flux * interp_coeffs))
+    except Exception as e:
+        print(f"Ошибка расчета дозы: {e}")
+        dose_val = 0.0
+
+    # Извлечение группового потока
+    try:
+        grp_df = sp.get_tally(name="groups").get_pandas_dataframe()
+        # Усредняем по всем ячейкам, если их несколько
+        grp_flux = grp_df[grp_df["score"]=="flux"]["mean"].values.tolist()
+        if not grp_flux: grp_flux = [0.0, 0.0, 0.0]
+    except Exception:
+        grp_flux = [0.0, 0.0, 0.0]
 
 ec = np.sqrt(ebins[:-1]*ebins[1:])
 
@@ -554,7 +600,7 @@ plt.step(ec, flux, where="mid", color="teal", lw=1.5)
 plt.xscale("log"); plt.yscale("log")
 plt.xlabel("Энергия нейтронов, эВ"); plt.ylabel("Поток (усл. ед.)")
 plt.title("Спектр нейтронов: " + C["material"] +f", источник {C['energy_MeV']} МэВ")
-plt.axvline(0.025,color="red",ls="--", alpha=.6, label="тепловые0.025 эВ")
+plt.axvline(0.025,color="red",ls="--", alpha=.6, label="тепловые 0.025 эВ")
 plt.axvline(C["energy_MeV"]*1e6, color="orange", ls="--", alpha=.6, label="источник")
 plt.legend(); plt.grid(alpha=.3, which="both"); plt.tight_layout()
 plt.savefig(C["out_spec"], dpi=120); plt.close()
@@ -568,10 +614,13 @@ plt.xlabel("X, см"); plt.ylabel("Z, см")
 plt.title("2D карта потока нейтронов: " + C["material"])
 plt.tight_layout(); plt.savefig(C["out_map"], dpi=120); plt.close()
 
-json.dump({"absorption": absb, "fission": fiss, "scatter": scat, "ngamma": ng, "spectrum_E": ec.tolist(), "spectrum_flux": flux.tolist()}, open(C["out_json"], "w"))
+json.dump({
+    "absorption": absb, "fission": fiss, "scatter": scat, "ngamma": ng, 
+    "dose": dose_val, "groups": grp_flux,
+    "spectrum_E": ec.tolist(), "spectrum_flux": flux.tolist()
+}, open(C["out_json"], "w"))
 print("NEUTRON_DONE")
 '''
-
 def run_neutrons_wsl(cfg, log_cb):
     tmp = tempfile.mkdtemp(prefix="prom_")
     def to_wsl(p):
@@ -614,8 +663,7 @@ def run_neutrons_wsl(cfg, log_cb):
     except Exception:
         shutil.rmtree(tmp, ignore_errors=True)
         raise
-
-# ЛОГИ
+    # ЛОГИ
 _logger  = logging.getLogger("prometheus")
 _logger.setLevel(logging.DEBUG)
 _log_fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%H:%M:%S")
@@ -642,19 +690,6 @@ def fmt_hl(s):
     if s >= _H: return f"{s/_H:.3g} ч"
     if s >= 60: return f"{s/60:.3g} мин"
     return f"{s:.3g} с"
-if __name__ == "__main__":
-    import time
-    print("=== Профилирование (ДО оптимизации) ===")
-    
-    t0 = time.time()
-    m = make_gamma_mat("water")
-    print(f"Один материал: {(time.time()-t0)*1000:.1f} мс")
-    
-    t0 = time.time()
-    for n in sorted(GAMMA_MATS.keys()):
-        make_gamma_mat(n)
-    print(f"Все {len(GAMMA_MATS)} материалов: {(time.time()-t0)*1000:.1f} мс")
-    
 
 if __name__ == "__main__":
     print("=== Самопроверка physics.py ===")
