@@ -1,6 +1,6 @@
 """
 physics.py — физическое ядро Prometheus Core v3
-Многослойность, Поляризация, Backscatter
+Многослойность, Поляризация, Backscatter + мост в wsl/openmc.
 """
 import os, sys, math, json, subprocess, tempfile, datetime, logging, shutil
 import numpy as np

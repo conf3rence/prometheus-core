@@ -230,7 +230,7 @@ class GammaTab(QtWidgets.QWidget):
         s.console(f"  Бугер: теория={theor_escape:.4f}, модель={sim_escape:.4f}")
         if backscatter_pct > 0: s.console(f"  Обратное рассеяние: {backscatter_pct:.2f}%")
         
-        # --- АБСОЛЮТНАЯ ДОЗА ---
+        # АБСОЛЮТНАЯ ДОЗА 
         if s.chk_abs.isChecked():
             abs_res = P.absolute_dose(
                 r, s.sp_act.value(), s.cb_au.currentText(),
@@ -239,7 +239,7 @@ class GammaTab(QtWidgets.QWidget):
             )
             s.console(f"  Абсолютная доза: {abs_res['dose_abs']:.3e} Зв")
             r.update(abs_res)
-        # -------------------------
+        # -----------------------------------------------
 
         s.a1.clear(); s.a2.clear(); s.a3.clear(); s.a4.clear()
         if len(r["src"]): s.a1.hist(r["src"],bins=40,color="seagreen"); s.a1.set_title("Спектр источника")
@@ -374,7 +374,7 @@ class ChargedTab(QtWidgets.QWidget):
         pt=s.cb_p.currentText(); mat=P.CP_MAT[s.cb_m.currentText()]; T0=s.sp_E.value(); R,dep,de=P.csda(pt,T0,mat)
         wr = {"протон": 2.0, "альфа": 20.0, "дейтрон": 2.0, "электрон": 1.0}.get(pt, 1.0)
         
-        # ИСПРАВЛЕНИЕ: Для электрона используем sp_elec
+        # Иправление для электрона используем sp_elec
         if pt == "электрон":
             dE_dx = P.sp_elec(T0, mat)[0]
         else:

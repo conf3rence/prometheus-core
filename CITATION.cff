@@ -10,7 +10,6 @@ license: MIT
 authors:
   - family-names: "Костин"
     given-names: "Ярослав"
-    # affiliation: "Название твоего вуза или организации" # Раскомментируй и впиши, если нужно
 
 references:
   - type: software
