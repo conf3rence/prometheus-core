@@ -50,5 +50,14 @@
   "Pu-239": {"lines":[[0.0516,0.00036],[0.1293,0.00006],[0.3750,0.000015]], "half_life_s": 7.61e11},
   "Cf-252": {"lines":[[0.043,0.001],[0.100,0.0001]], "half_life_s": 230400.0},
   "Sr-90":  {"lines":[[0.546,1.0]], "half_life_s": 908928000.0, "_note": "Beta emitter, no gamma lines"},
-  "Y-90":   {"lines":[[2.280,0.9999]], "half_life_s": 230400.0, "_note": "Beta emitter, no gamma lines"}
+  "Y-90":   {"lines":[[2.280,0.9999]], "half_life_s": 230400.0, "_note": "Beta emitter, no gamma lines"},
+  "U-235": {
+    "lines": [
+      [0.1857, 0.572],
+      [0.1438, 0.109],
+      [0.1634, 0.051],
+      [0.2053, 0.050]
+    ],
+    "half_life_s": 2.221e16
+  }
 }
