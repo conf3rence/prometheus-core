@@ -39,7 +39,15 @@ _ISO_RAW = _load("isotopes.json")
 GAMMA_MATS = {k: v for k, v in _MAT_RAW.items() if not k.startswith("_")}
 ISOTOPES   = {k: v for k, v in _ISO_RAW.items() if not k.startswith("_")}
 
-ACTIVITY_U = {"Бк":1.0,"кБк":1e3,"МБк":1e6,"ГБк":1e9,"мКи":3.7e7,"Ки":3.7e10}
+ACTIVITY_U = {
+    # СИ (Беккерель)
+    "мкБк": 1e-6, "мБк": 1e-3, "Бк": 1.0, "кБк": 1e3, "МБк": 1e6, 
+    "ГБк": 1e9, "ТБк": 1e12, "ПБк": 1e15, "ЭБк": 1e18,
+    # Внесистемные (Кюри)
+    "нКи": 37.0, "мкКи": 3.7e4, "мКи": 3.7e7, "Ки": 3.7e10, 
+    "кКи": 3.7e13, "МКи": 3.7e16, "ГКи": 3.7e19
+}
+
 TIME_U     = {"с":1.0,"мин":60.0,"ч":3600.0,"сут":86400.0,"год":_Y}
 
 CP_MAT = {
@@ -136,7 +144,7 @@ def _rotate(d, mu, phi):
     nz = dz*mu - st*perp*cp; n= math.sqrt(nx*nx + ny*ny + nz*nz)
     return np.array([nx/n, ny/n, nz/n])
 
-@njit(cache=True)
+@njit(cache=False)
 def _interp_log_nb(E, t0, sc, tm, c1, c2):
     x = (np.log(E) - t0) * sc
     n = len(tm) - 1
@@ -147,7 +155,7 @@ def _interp_log_nb(E, t0, sc, tm, c1, c2):
             c1[i] + (c1[i+1] - c1[i]) * f,
             c2[i] + (c2[i+1] - c2[i]) * f)
 
-@njit(cache=True)
+@njit(cache=False)
 def _mc_core_numba(n_hist, seed, is_slab, R,
                    tm_sph, c1_sph, c2_sph, t0_sph, sc_sph,
                    n_layers, tm_L, c1_L, c2_L, t0_L, sc_L,
@@ -310,7 +318,7 @@ def gamma_mc(mat, R, spec_lines, n_hist, seed=42, ngrid=64, e_cut=0.001,
     if geom == "slab": gsc = (ngrid - 1) / total_thick; rad_n = 40; dr = total_thick / rad_n
     else: gsc = (ngrid - 1) / (2 * R); rad_n = 40; dr = R / rad_n
     
-    n_procs = min(mp.cpu_count(), 4)
+    n_procs = 1  # <--- ПРИНУДИТЕЛЬНО 1 ПРОЦЕСС ДЛЯ GUI
     
     if n_hist < 100000 or n_procs == 1:
         edep, edepsq, nph, nco, npa, nlk, nlk_uncoll, n_colls, g2, rad_dep, leak_arr, coll_hist, theta_hist, backscatter_count = _mc_worker((
@@ -433,26 +441,135 @@ def sp_elec(T, mat):
     rad_factor = min(1.0, mat["Z"] * T / 800.0)
     return (coll + coll * rad_factor) * mat["rho"], coll * mat["rho"], coll * rad_factor * mat["rho"]
 
-def csda(part, T0, mat, nstep=4000, straggling=True, seed=None):
-    mass, z = PARTICLES[part]; ise = (part == "электрон")
-    rng = np.random.default_rng(seed) if seed is not None else np.random
-    dT = T0 / nstep; x = 0.0; T = T0; dep = [0.0]; de = []
-    xi = 0.05 if part == "протон" else 0.02 
-    while T > dT:
-        s = sp_elec(T, mat)[0] if ise else sp_heavy(T, mass, z, mat)
-        if s <= 0.0: break
-        if straggling:
-            dE_loss = dT + rng.normal(0, dT * xi)
-            dE_loss = max(dE_loss, 0.01 * dT)
-        else: dE_loss = dT
-        x += dE_loss / s; dep.append(x); de.append(s); T -= dE_loss
+def csda(part, T0, mat, nstep=2000, straggling=True, seed=None):
+    """CSDA с расчетом среднего пробега. Дисперсия (страгглинг) считается отдельно."""
+    mass, z = PARTICLES[part]
+    dT = T0 / nstep
+    x = 0.0; T = T0
+    dep = [0.0]; de = []
+    
+    while T > 0.01:
+        # s_val в МэВ/см (полная тормозная способность)
+        s_val = (sp_elec(T, mat)[0] if part == "электрон" else sp_heavy(T, mass, z, mat)) * mat["rho"]
+        if s_val <= 0: break
+        
+        dx = dT / s_val
+        dep.append(dep[-1] + dx)
+        de.append(s_val)
+        x += dx
+        T -= dT
+        
     de.append(de[-1] if de else 0.0)
-    return x, np.array(dep), np.array(de)
+    return x, np.array(dep), np.array(de) # <--- ВОЗВРАЩАЕМ ПРОБЕГ (x)!
+
+def straggling_sigma(part, T0, mat, nstep=2000):
+    """Стандартное отклонение пробега по Бору (интеграл дисперсии вдоль трека)."""
+    mass, z = PARTICLES[part]
+    dT = T0 / nstep
+    T = T0
+    sigma_R_sq = 0.0
+    while T > 0.1:  # <-- Обрываем при T=0.1 МэВ, ниже формула Бора неприменима
+        s_val = (sp_elec(T, mat)[0] if part == "электрон" else sp_heavy(T, mass, z, mat)) * mat["rho"]
+        if s_val <= 0: break
+        dx = dT / s_val
+        p = np.sqrt(T * (T + 2 * mass))
+        beta = max(p / (T + mass), 0.01)  # <-- Кап на beta, чтобы не было деления на 0
+        dOmega2_dx = 0.307 * (mat["Z"] / mat["A"]) * mat["rho"] / beta**2 * (1 - beta**2 / 2.0)
+        sigma_R_sq += dOmega2_dx * dx / (s_val**2)
+        T -= dT
+    return np.sqrt(sigma_R_sq)
+
+def lateral_straggling_2d(part, T0, mat, n_particles=2000, n_steps=300):
+    """2D-карта латерального рассеяния (Highland formula с учетом 1/beta^2)."""
+    mass, z = PARTICLES[part]
+    dT = T0 / n_steps
+    X0 = 36.08 # Радиационная длина воды (см)
+    rng = np.random.default_rng()
+    
+    R_est, _, _ = csda(part, T0, mat, nstep=100, straggling=False)
+    x_bins = np.linspace(0, R_est * 1.05, 100)
+    y_bins = np.linspace(-3.0, 3.0, 100) # Возвращаем широкий диапазон для наглядности
+    grid, _, _ = np.histogram2d([], [], bins=[x_bins, y_bins])
+    
+    for _ in range(n_particles):
+        x, y = 0.0, 0.0
+        theta = 0.0
+        T = T0
+        
+        for i in range(n_steps):
+            s_val = (sp_heavy(T, mass, z, mat) if part != "электрон" else sp_elec(T, mat)[0]) * mat["rho"]
+            if s_val <= 0: break
+            
+            dx = dT / s_val 
+            
+            p = np.sqrt(T * (T + 2 * mass))
+            beta = p / (T + mass)
+            
+            if p > 0 and beta > 1e-6:
+                # Формула Хайленда с точным 1/beta^2
+                theta0 = (13.6 / (beta * p)) * z * np.sqrt(dx / X0) * (1 + 0.038 * np.log(dx / X0 + 1e-12))
+                theta += rng.normal(0, abs(theta0))
+            
+            x += dx * np.cos(theta)
+            y += dx * np.sin(theta)
+            T -= dT
+            
+            if 0 <= x < x_bins[-1] and y_bins[0] <= y <= y_bins[-1]:
+                ix = np.searchsorted(x_bins, x) - 1
+                iy = np.searchsorted(y_bins, y) - 1
+                if 0 <= ix < 99 and 0 <= iy < 99:
+                    grid[ix, iy] += 1
+
+    return grid.T, x_bins, y_bins
+
+def lateral_straggling_2d(part, T0, mat, n_particles=2000, n_steps=400):
+    """2D-карта латерального рассеяния с корректным учетом 1/beta^2."""
+    mass, z = PARTICLES[part]
+    dT = T0 / n_steps
+    X0 = 36.08 # Радиационная длина воды (см)
+    rng = np.random.default_rng()
+    
+    R_est, _, _ = csda(part, T0, mat, nstep=100, straggling=False)
+    x_bins = np.linspace(0, R_est * 1.05, 100)
+    y_bins = np.linspace(-1.5, 1.5, 100) # Сузили диапазон Y для наглядности
+    grid, _, _ = np.histogram2d([], [], bins=[x_bins, y_bins])
+    
+    for _ in range(n_particles):
+        x, y = 0.0, 0.0
+        theta = 0.0
+        T = T0
+        
+        for i in range(n_steps):
+            s_val = sp_heavy(T, mass, z, mat) if part != "электрон" else sp_elec(T, mat)[0]
+            if s_val <= 0: break
+            
+            dx = dT / s_val 
+            
+            p = np.sqrt(T * (T + 2 * mass))
+            beta = p / (T + mass)
+            
+            if p > 0 and beta > 0:
+                # Формула Хайленда
+                theta0 = (13.6 / (beta * p)) * z * np.sqrt(dx / X0) * (1 + 0.038 * np.log(dx / X0 + 1e-12))
+                theta += rng.normal(0, theta0)
+            
+            x += dx * np.cos(theta)
+            y += dx * np.sin(theta)
+            T -= dT
+            
+            if 0 <= x < x_bins[-1] and y_bins[0] <= y <= y_bins[-1]:
+                ix = np.searchsorted(x_bins, x) - 1
+                iy = np.searchsorted(y_bins, y) - 1
+                if 0 <= ix < 99 and 0 <= iy < 99:
+                    grid[ix, iy] += 1
+
+    return grid.T, x_bins, y_bins
 
 def range_vs_energy(part, mat, nE=60, seed=None):
-    Emin, Emax = (0.5, 500.0) if part in ("протон","альфа","дейтрон") else (0.05, 50.0)
+    Emin, Emax = (0.5, 500.0) if part in ("протон", "альфа", "дейтрон") else (0.05, 50.0)
     Es = np.linspace(Emin, Emax, nE)
-    return Es, np.array([csda(part, e, mat, nstep=800, seed=seed)[0] for e in Es])
+    # Берем средний пробег (индекс 1 - это dep, и из него [-1])
+    return Es, np.array([csda(part, e, mat, nstep=800, seed=seed)[1][-1] for e in Es])
 
 #  НЕЙТРОНЫ — мост в WSL (запускает OpenMC в Linux)
 NEUTRON_SCRIPT = r'''
@@ -515,7 +632,17 @@ geom = openmc.Geometry([cell])
 src = openmc.IndependentSource()
 src.space= openmc.stats.Point((0,0,0))
 src.angle  = openmc.stats.Isotropic()
-src.energy = openmc.stats.Discrete([C["energy_MeV"]*1e6], [1.0])
+
+spec_type = C.get("spectrum", "mono")
+if spec_type == "u235":
+    # Стандартный спектр деления U-235 (Watt)
+    src.energy = openmc.stats.Watt(a=0.988, b=2.249)
+elif spec_type == "cf252":
+    # Спектр спонтанного деления Cf-252 (Watt)
+    src.energy = openmc.stats.Watt(a=1.18, b=1.034)
+else:
+    # Моноэнергетический
+    src.energy = openmc.stats.Discrete([C["energy_MeV"]*1e6], [1.0])
 src.particle = "neutron"
 
 st = openmc.Settings()
@@ -690,6 +817,45 @@ def fmt_hl(s):
     if s >= _H: return f"{s/_H:.3g} ч"
     if s >= 60: return f"{s/60:.3g} мин"
     return f"{s:.3g} с"
+def lateral_straggling_2d(part, T0, mat, n_particles=2000, n_steps=300):
+    """Симуляция 2D-карты латерального (бокового) рассеяния пучка частиц."""
+    mass, z = PARTICLES[part]
+    dT = T0 / n_steps
+    X0 = 36.08 # Радиационная длина для воды (см)
+    
+    R_est, _, _ = csda(part, T0, mat, nstep=100) 
+    x_bins = np.linspace(0, R_est * 1.1, 100)
+    y_bins = np.linspace(-3, 3, 100)
+    grid, _, _ = np.histogram2d([], [], bins=[x_bins, y_bins])
+    
+    for _ in range(n_particles):
+        x, y = 0.0, 0.0
+        theta = 0.0
+        T = T0
+        
+        for i in range(n_steps):
+            s_val = sp_heavy(T, mass, z, mat) if part != "электрон" else sp_elec(T, mat)[0]
+            if s_val <= 0: break
+            
+            dx = dT / s_val 
+            
+            p = np.sqrt(T * (T + 2*mass))
+            beta = p / (T + mass)
+            if p > 0:
+                theta0 = (13.6 / (beta * p)) * z * np.sqrt(dx / X0) * (1 + 0.038 * np.log(dx / X0))
+                theta += np.random.normal(0, theta0) 
+            
+            x += dx * np.cos(theta)
+            y += dx * np.sin(theta)
+            T -= dT
+            
+            if 0 <= x < x_bins[-1] and -3 <= y <= 3:
+                ix = np.searchsorted(x_bins, x) - 1
+                iy = np.searchsorted(y_bins, y) - 1
+                if 0 <= ix < 99 and 0 <= iy < 99:
+                    grid[ix, iy] += 1
+
+    return grid.T, x_bins, y_bins
 
 if __name__ == "__main__":
     print("=== Самопроверка physics.py ===")
