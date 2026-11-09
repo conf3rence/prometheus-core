@@ -2,8 +2,8 @@ cff-version: 1.2.0
 message: "Если вы используете этот код в своей работе, пожалуйста, цитируйте его следующим образом."
 title: "Prometheus Core: Monte Carlo Simulation of Gamma, Charged Particles, and Neutrons"
 abstract: "Программный комплекс для симуляции переноса излучения с верификацией по NIST, ICRP и ENDF/B. Включает JIT-оптимизацию через Numba и мультипроцессинг."
-version: 3.0.0
-date-released: "2026-11-07"
+version: 4.0.0
+date-released: "2026-11-09"
 repository-code: "https://github.com/conf3rence/prometheus-core"
 license: MIT
 
@@ -28,7 +28,7 @@ references:
       - family-names: "Smith"
         given-names: "Kord"
     doi: "10.1016/j.anucene.2014.07.048"
-    version: "0.13.3"
+    version: "0.15.3"
     
   - type: software
     title: "xraylib"

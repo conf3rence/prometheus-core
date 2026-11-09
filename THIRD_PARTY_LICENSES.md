@@ -15,16 +15,15 @@
 ## 3. ICRP Publication 74
 *   **Использование:** Коэффициенты качества излучения \(w_R\) для перевода Гр в Зв.
 *   **Цитирование:** *ICRP Publication 74. Conversion Coefficients for use in Radiological Protection Against External Radiation. Ann. ICRP 26 (3-4), 1996.*
-*   **Примечание:** Используются только широко опубликованные табличные значения, текст публикации не воспроизводится.
 
 ## 4. ENDF/B (Evaluated Nuclear Data File)
 *   **Использование:** Оценённые ядерные данные для OpenMC.
-*   **Цитирование:** *D.A. Brown et al., "ENDF/B-VIII.0...", Nuclear Data Sheets, vol. 148, pp. 1-142, 2018.*
+*   **Цитирование:** *D.A. Brown et al., "ENDF/B-VIII.0: The 8th Major Release of the Nuclear Reaction Data Library...", Nuclear Data Sheets, vol. 148, pp. 1-142, 2018.*
 *   **Лицензия:** Открытые данные (US DOE Data Policy).
 
 ## 5. OpenMC
 *   **Использование:** Движок для моделирования переноса нейтронов.
-*   **Цитирование:** *Paul K. Romano, et al., "OpenMC: A State-of-the-Art Monte Carlo Code...", Ann. Nucl. Energy, 82, 90–97 (2015).*
+*   **Цитирование:** *Paul K. Romano, et al., "OpenMC: A State-of-the-Art Monte Carlo Code for Research and Development," Ann. Nucl. Energy, 82, 90–97 (2015).*
 *   **Лицензия:** MIT License.
 
 ## 6. xraylib
@@ -48,16 +47,16 @@
 *   **Использование:** Графики и визуализации.
 *   **Лицензия:** PSF-based (BSD-совместимая).
 
-## 11. PyInstaller
+## 11. PyVista
+*   **Использование:** 3D-визуализация (облака нейтронов, 3D-сферы, треки).
+*   **Лицензия:** MIT License.
+*   **Ссылка:** https://pyvista.org/
+
+## 12. VTK (Visualization Toolkit)
+*   **Использование:** Движок рендеринга для PyVista.
+*   **Лицензия:** BSD 3-Clause License.
+*   **Ссылка:** https://vtk.org/
+
+## 13. PyInstaller
 *   **Использование:** Сборка standalone-исполняемых файлов.
 *   **Лицензия:** GPL v2 с исключением для сборки приложений (сам PyInstaller остается GPL, ваше приложение — нет).
-
-## 13. PyVista
-* **Использование:** 3D-визуализация (облака нейтронов, 3D-сферы, треки).
-* **Лицензия:** MIT License.
-* **Ссылка:** https://pyvista.org/
-
-## 14. VTK (Visualization Toolkit)
-* **Использование:** Движок рендеринга для PyVista.
-* **Лицензия:** BSD 3-Clause License.
-* **Ссылка:** https://vtk.org/
