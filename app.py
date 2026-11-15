@@ -13,8 +13,61 @@ from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavToolbar
 from matplotlib.colors import LogNorm
 import physics as P
 import validator
+# ==========================================
+# ГЛОБАЛЬНЫЕ НАСТРОЙКИ СБОРКИ
+# True = Lite (без нейтронов), False = Full (со всеми модулями)
+# ==========================================
+LITE_MODE = False
 
 OUT = P.OUT_DIR
+
+PARTICLES_DESC = {
+    "протон": "Масса: 938.27 МэВ/c²\nЗаряд: +1e\n\nЯдро атома водорода. Основной механизм потерь энергии — ионизация и возбуждение атомов среды (формула Бете-Блоха). Обладает характерным пиком Брэгга в конце пробега. Широко используется в протонной терапии.",
+    "альфа": "Масса: 3727.38 МэВ/c²\nЗаряд: +2e\n\nЯдро атома гелия (He²⁺). Обладает высокой линейной передачей энергии (ЛПЭ) и очень коротким пробегом. При внутреннем облучении представляет наибольшую радиационную опасность (коэффициент качества wR=20).",
+    "дейтрон": "Масса: 1875.61 МэВ/c²\nЗаряд: +1e\n\nЯдро атома дейтерия (тяжелый водород). Используется в ускорителях для генерации нейтронов (реакции D-D или D-T). В веществе ведет себя аналогично протону, но имеет больший пробег при той же энергии.",
+    "электрон": "Масса: 0.511 МэВ/c²\nЗаряд: -1e\n\nЛегкая элементарная частица. При энергиях выше 10 МэВ основным механизмом потерь становится тормозное излучение (bremsstrahlung). Обладает наибольшим страгглингом (разбросом пробега) среди всех частиц."
+}
+
+CP_MAT_DESC = {
+    "вода": "Вода (H₂O). Основной компонент биологических тканей. Отличный замедлитель. Плотность 1.0 г/см³.",
+    "воздух": "Воздух. Смесь газов (N, O, Ar). Очень низкая плотность. Плотность 0.0012 г/см³.",
+    "ткань": "Ткань (мышцы). Мягкая биологическая ткань. Плотность 1.06 г/см³.",
+    "кость": "Костная ткань. Содержит кальций и фосфор. Плотность 1.92 г/см³.",
+    "алюминий": "Алюминий (Al). Легкий металл, конструкционный материал. Плотность 2.70 г/см³.",
+    "железо": "Железо (Fe). Конструкционный материал. Плотность 7.87 г/см³.",
+    "медь": "Медь (Cu). Хороший проводник и теплоотвод. Плотность 8.96 г/см³.",
+    "вольфрам": "Вольфрам (W). Тугоплавкий металл, компактная защита. Плотность 19.3 г/см³.",
+    "свинец": "Свинец (Pb). Классическая защита от гамма-излучения. Плотность 11.35 г/см³.",
+    "уран": "Уран (U). Тяжелый металл, топливо для реакторов. Плотность 18.95 г/см³.",
+    "полиэтилен": "Полиэтилен. Пластик с высоким содержанием водорода. Замедлитель нейтронов. Плотность 0.94 г/см³.",
+    "графит": "Графит (C). Классический замедлитель нейтронов (РБМК). Плотность 1.7 г/см³.",
+    "бетон": "Бетон. Строительный материал, содержит водород и тяжелые элементы. Плотность 2.3 г/см³.",
+    "цирконий": "Циркониевый сплав (Zircaloy). Основа оболочек ТВЭЛов. Плотность 6.56 г/см³.",
+    "сталь_304": "Нержавеющая сталь 304. Трубопроводы и корпуса. Плотность 8.0 г/см³.",
+    "инконель": "Инконель. Жаропрочный сплав (Ni-Cr-Fe). Плотность 8.4 г/см³.",
+    "титан": "Титановый сплав (Ti-6Al-4V). Аэрокосмическая и ядерная техника. Плотность 4.43 г/см³.",
+    "бористая_сталь": "Бористая сталь. Для стержней аварийной защиты. Плотность 7.8 г/см³.",
+    "кадмий": "Кадмий (Cd). Мощный поглотитель тепловых нейтронов. Плотность 8.65 г/см³.",
+    "гадолиний": "Гадолиний (Gd). Выгорающий поглотитель в топливе. Плотность 7.9 г/см³.",
+    "висмут": "Висмут (Bi). Нетоксичная альтернатива свинцу. Плотность 9.78 г/см³.",
+    "жидкий_натрий": "Жидкий натрий. Теплоноситель для быстрых реакторов. Плотность 0.93 г/см³."
+}
+
+NEUTRON_MATS_DESC = {
+    "water": "Вода (H₂O). Отличный замедлитель нейтронов благодаря легким ядрам водорода. Плотность 1.0 г/см³.",
+    "polyethylene": "Полиэтилен ((C₂H₄)n). Пластик с высоким содержанием водорода, один из лучших материалов для защиты от нейтронов. Плотность 0.94 г/см³.",
+    "concrete": "Бетон. Строительный материал, содержит водород и тяжелые элементы. Плотность 2.3 г/см³.",
+    "iron": "Железо. Используется в конструкциях и защите. Не сильно замедляет нейтроны, но хорошо рассеивает их. Плотность 7.87 г/см³.",
+    "lead": "Свинец. Тяжелый металл, слабо замедляет нейтроны, но хорошо защищает от вторичного гамма-излучения. Плотность 11.35 г/см³.",
+    "graphite": "Графит (углерод). Классический замедлитель (реакторы РБМК). Плотность 1.7 г/см³.",
+    "b4c": "Карбид бора (B₄C). Мощный поглотитель тепловых нейтронов (реакция B-10(n,α)). Плотность 2.52 г/см³.",
+    "uranium": "Уран. Топливо для реакторов. Вызывает деление под действием нейтронов. Плотность 19.0 г/см³.",
+    "zircaloy": "Циркониевый сплав (Zircaloy). Основа оболочек ТВЭЛов. Плотность 6.56 г/см³.",
+    "heavy_water": "Тяжелая вода (D₂O). Отличный замедлитель, почти не поглощает нейтроны. Плотность 1.11 г/см³.",
+    "borated_steel": "Бористая сталь. Используется для стержней аварийной защиты. Плотность 7.8 г/см³.",
+    "concrete_magnetite": "Магнетитовый бетон. Тяжелый бетон на основе железной руды. Плотность 4.0 г/см³.",
+    "cadmium": "Кадмий. Классический поглотитель тепловых нейтронов. Плотность 8.65 г/см³."
+}
 os.makedirs(OUT, exist_ok=True)
 
 CUSTOM_ISO_FILE = os.path.join(P.OUT_DIR, "custom_isotopes.json")
@@ -282,33 +335,42 @@ class PopOutDialog(QtWidgets.QDialog):
         super().closeEvent(event)
 
 class SelectorDialog(QtWidgets.QDialog):
-    def __init__(s, title, data_dict, item_type, parent=None):
+    def __init__(s, title, data_dict, item_type, parent=None, descriptions=None):
         super().__init__(parent); s.setWindowTitle(title); s.resize(700, 550); s.data_dict = data_dict; s.item_type = item_type
+        s.descriptions = descriptions
+        
         layout = QtWidgets.QHBoxLayout(s); left = QtWidgets.QVBoxLayout()
         s.search = QtWidgets.QLineEdit(); s.search.setPlaceholderText("🔍 Поиск..."); s.search.textChanged.connect(s.filter_list); left.addWidget(s.search)
         s.list_widget = QtWidgets.QListWidget(); s.list_widget.itemDoubleClicked.connect(s.accept)
         for k in sorted(data_dict.keys()):
             if not k.startswith("_"): s.list_widget.addItem(k)
         s.list_widget.currentTextChanged.connect(s.update_details); left.addWidget(s.list_widget)
+        
         right = QtWidgets.QVBoxLayout(); right.addWidget(QtWidgets.QLabel("<b>Информация:</b>"))
-        s.details = QtWidgets.QTextBrowser(); s.details.setStyleSheet("background-color: #1e1e1e; color: #d4d4d4; font-family: Consolas; font-size: 13px;")
+        s.details = QtWidgets.QTextBrowser(); s.details.setStyleSheet("background-color: #1e1e1e; color: #d4d4d4; font-family: Consolas; font-size: 13px; padding: 5px;")
         right.addWidget(s.details); layout.addLayout(left, 1); layout.addLayout(right, 1)
+        
         btn_box = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Ok | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
         btn_box.accepted.connect(s.accept); btn_box.rejected.connect(s.reject)
         main = QtWidgets.QVBoxLayout(); main.addLayout(layout); main.addWidget(btn_box); s.setLayout(main)
         if s.list_widget.count() > 0: s.list_widget.setCurrentRow(0)
+        
     def filter_list(s, text):
         for i in range(s.list_widget.count()): s.list_widget.item(i).setHidden(text.lower() not in s.list_widget.item(i).text().lower())
+        
     def update_details(s, name):
         if not name or name not in s.data_dict: return
+        if s.descriptions and name in s.descriptions:
+            s.details.setText(s.descriptions[name]); return
+            
         d = s.data_dict[name]; text = ""
         if s.item_type == "isotope":
             text += f"Изотоп: {name}\n\nГамма-линии:\n"
             for line in d.get("lines", []): text += f"  - {line[0]:.4f} МэВ ({line[1]*100:.1f}%)\n"
         elif s.item_type.startswith("material"):
             text += f"Материал: {name}\n\nZ: {d.get('Z', 0):.2f}\nA: {d.get('A', 0):.2f}\nПлотность: {d.get('rho', 0)} г/см³\n"
+            if "I" in d: text += f"Энергия ионизации: {d['I']} эВ\n"
         s.details.setText(text)
-
 # ==========================================
 # РАБОЧИЕ ПОТОКИ
 # ==========================================
@@ -374,7 +436,13 @@ class GammaTab(QtWidgets.QWidget):
         s.tbl_layers.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.Stretch)
         def update_total_thickness(): s.sp_R.setValue(sum(s.tbl_layers.cellWidget(i, 1).value() for i in range(3))); s.validate()
         for i in range(3):
-            cb = QtWidgets.QComboBox(); cb.addItems(sorted(P.GAMMA_MATS.keys())); cb.setCurrentText("lead" if i==0 else ("polyethylene" if i==1 else "concrete")); s.tbl_layers.setCellWidget(i, 0, cb)
+            # Создаем кнопку вместо выпадающего списка
+            btn_layer_mat = QtWidgets.QPushButton("lead" if i==0 else ("polyethylene" if i==1 else "concrete"))
+            btn_layer_mat.setStyleSheet(btn_style)
+            # Привязываем клик к открытию красивого диалога
+            btn_layer_mat.clicked.connect(lambda checked=False, b=btn_layer_mat: s.select_layer_material(b))
+            s.tbl_layers.setCellWidget(i, 0, btn_layer_mat)
+            
             sb = QtWidgets.QDoubleSpinBox(); sb.setRange(0, 1000); sb.setValue(2.0 if i==0 else (10.0 if i==1 else 0.0)); sb.valueChanged.connect(update_total_thickness); s.tbl_layers.setCellWidget(i, 1, sb)
         s.tbl_layers.setVisible(False)
         s.sp_R=QtWidgets.QDoubleSpinBox(); s.sp_R.setRange(1,300); s.sp_R.setValue(10); s.sp_n=QtWidgets.QSpinBox(); s.sp_n.setRange(1000,5_000_000); s.sp_n.setValue(100000); s.sp_n.setGroupSeparatorShown(True)
@@ -405,6 +473,12 @@ class GammaTab(QtWidgets.QWidget):
     def select_material(s):
         dlg = SelectorDialog("Материал", P.GAMMA_MATS, "material_gamma", s)
         if dlg.exec(): s.sel_mat = dlg.list_widget.currentItem().text(); s.btn_mat.setText(s.sel_mat)
+    def select_layer_material(s, btn):
+        dlg = SelectorDialog("Материал слоя", P.GAMMA_MATS, "material_gamma", s)
+        if dlg.exec(): 
+            sel = dlg.list_widget.currentItem()
+            if sel:
+                btn.setText(sel.text())
     def select_isotope(s):
         dlg = SelectorDialog("Изотоп", P.ISOTOPES, "isotope", s)
         if dlg.exec(): s.sel_iso = dlg.list_widget.currentItem().text(); s.btn_iso.setText(s.sel_iso)
@@ -420,7 +494,7 @@ class GammaTab(QtWidgets.QWidget):
         if s.cb_geom.currentText() == "Плоский слой":
             for i in range(3):
                 thick = s.tbl_layers.cellWidget(i, 1).value()
-                if thick > 0: layers.append((P.make_gamma_mat(s.tbl_layers.cellWidget(i, 0).currentText()), thick))
+                if thick > 0: layers.append((P.make_gamma_mat(s.tbl_layers.cellWidget(i, 0).text()), thick))
             if not layers: return s.console("[ГАММА] ОШИБКА: Все слои нулевой толщины!")
             mat = layers[0][0]; R = sum(l[1] for l in layers)
         else: mat = P.make_gamma_mat(s.sel_mat); R = s.sp_R.value()
@@ -441,7 +515,7 @@ class GammaTab(QtWidgets.QWidget):
         backscatter_pct = (r.get("backscatter_count", 0) / r["n"]) * 100 if r["n"] > 0 else 0.0
         
         # Выводим в лог
-        s.console(f"[ГАММА] готово: доза={r['dose']:.3e} Гр/ч-ца | фото/комптон/пары={r['nph']}/{r['nco']}/{r['npa']}")
+        s.console(f"[ГАММА] готово: доза(ср)={r['dose_avg']:.3e} | доза(детектор)={r['dose_detector']:.3e} Гр/ч-ца | фото/комптон/пары={r['nph']}/{r['nco']}/{r['npa']}")
         s.console(f"  Бугер: теория={theor_escape:.4f}, модель={sim_escape:.4f}")
         if backscatter_pct > 0: s.console(f"  Обратное рассеяние: {backscatter_pct:.2f}%")
         
@@ -583,15 +657,16 @@ class ChargedTab(QtWidgets.QWidget):
 
 class NeutronTab(QtWidgets.QWidget):
     def __init__(s, console):
-        super().__init__(); s.console=console; s.w=None
+        super().__init__(); s.console=console; s.w=None; s.sel_mat = "water"
         root=QtWidgets.QHBoxLayout(s); p=QtWidgets.QWidget(); p.setFixedWidth(350); fl=QtWidgets.QFormLayout(p)
         
-        # 1. СОЗДАЕМ ВСЕ ЭЛЕМЕНТЫ ИНТЕРФЕЙСА
-        s.cb_m=QtWidgets.QComboBox(); s.cb_m.addItems(["water","polyethylene","concrete","iron","lead","graphite","b4c","uranium"])
+        # Кнопка выбора материала (вместо выпадающего списка)
+        s.btn_m = QtWidgets.QPushButton("water")
+        s.btn_m.setStyleSheet("background-color: #2b2b2b; color: #ffffff; text-align: left; padding-left: 10px; border: 1px solid #555555; border-radius: 4px;")
+        s.btn_m.clicked.connect(s.select_material)
         
         s.cb_spec = QtWidgets.QComboBox()
         s.cb_spec.addItems(["Моноэнергетический", "Спектр U-235", "Спектр Cf-252"])
-        
         s.sp_R=QtWidgets.QDoubleSpinBox(); s.sp_R.setRange(1,200); s.sp_R.setValue(30)
         s.sp_E=QtWidgets.QDoubleSpinBox(); s.sp_E.setRange(0.001, 20); s.sp_E.setValue(2.0)
         s.sp_n=QtWidgets.QSpinBox(); s.sp_n.setRange(1000,2_000_000); s.sp_n.setValue(10000)
@@ -599,11 +674,10 @@ class NeutronTab(QtWidgets.QWidget):
         s.sp_mesh=QtWidgets.QSpinBox(); s.sp_mesh.setRange(20,200); s.sp_mesh.setValue(80)
         
         s.btn=QtWidgets.QPushButton("▶ Запустить OpenMC")
-        s.btn.clicked.connect(s.run) # Привязка кнопки к методу run
+        s.btn.clicked.connect(s.run)
         s.btn.setStyleSheet("background:#00695c;color:white;padding:6px;")
         
-        # 2. ДОБАВЛЯЕМ ИХ В ЛЕВУЮ ПАНЕЛЬ
-        fl.addRow("Материал", s.cb_m)
+        fl.addRow("Материал", s.btn_m)
         fl.addRow("Спектр источника", s.cb_spec) 
         fl.addRow("Радиус", s.sp_R)
         fl.addRow("Энергия", s.sp_E)
@@ -620,32 +694,38 @@ class NeutronTab(QtWidgets.QWidget):
         btn_layout.addWidget(btn_3d); btn_layout.addWidget(btn_pop); fl.addRow(btn_layout)
         
         root.addWidget(p)
-        
-        # 3. СОЗДАЕМ ГРАФИКИ
         s.fig=Figure(figsize=(10,8),tight_layout=True); s.a1=s.fig.add_subplot(211); s.a2=s.fig.add_subplot(212)
         s.canvas=FigureCanvas(s.fig); g=QtWidgets.QWidget(); gl=QtWidgets.QVBoxLayout(g); s.toolbar_g = NavToolbar(s.canvas,s); gl.addWidget(s.toolbar_g); gl.addWidget(s.canvas); root.addWidget(g,1)
     
-    # 4. МЕТОД ЗАПУСКА РАСЧЕТА (ВЫНЕСЕН ИЗ __init__)
+    def select_material(s):
+        # Список ВСЕХ материалов для нейтронов
+        mats = {k: {} for k in [
+            "water", "heavy_water", "polyethylene", "borated_polyethylene", 
+            "concrete", "concrete_magnetite", "iron", "steel_304", "lead", 
+            "tungsten", "graphite", "beryllium", "uranium", "b4c", "cadmium", 
+            "gadolinium", "hafnium", "zircaloy"
+        ]}
+        dlg = SelectorDialog("Выбор материала (Нейтроны)", mats, "material_neutron", s, descriptions=NEUTRON_MATS_DESC)
+        if dlg.exec():
+            sel = dlg.list_widget.currentItem()
+            if sel: s.sel_mat = sel.text(); s.btn_m.setText(s.sel_mat)
+
     def run(s):
         if s.w and s.w.isRunning(): return
-        
-        # Определяем тип спектра по тексту из выпадающего списка
         spec = "mono"
         if s.cb_spec.currentText() == "Спектр U-235": spec = "u235"
         elif s.cb_spec.currentText() == "Спектр Cf-252": spec = "cf252"
-            
         cfg={
-            "material": s.cb_m.currentText(),
-            "radius": s.sp_R.value(),
-            "energy_MeV": s.sp_E.value(),
-            "particles": s.sp_n.value(),
-            "batches": s.sp_b.value(),
+            "material": s.sel_mat, 
+            "radius": s.sp_R.value(), 
+            "energy_MeV": s.sp_E.value(), 
+            "particles": s.sp_n.value(), 
+            "batches": s.sp_b.value(), 
             "mesh_n": s.sp_mesh.value(), 
-            "spectrum": spec            
+            "spectrum": spec
         }
         s.btn.setEnabled(False); s.console("[НЕЙТРОНЫ] запуск..."); s.w=NeutronWorker(cfg); s.w.msg.connect(s.console); s.w.done.connect(s.ok); s.w.fail.connect(lambda m: s.console("[ОШИБКА] "+m)); s.w.start()
     
-    # 5. МЕТОД ОТРИСОВКИ РЕЗУЛЬТАТОВ
     def ok(s,r):
         s.btn.setEnabled(True); st=r["stats"]; s.console(f"[НЕЙТРОНЫ] доза: {st.get('dose', 0):.4e} Зв")
         import matplotlib.image as mpimg; s.a1.clear(); s.a2.clear(); s.a1.imshow(mpimg.imread(r["spec_img"])); s.a1.axis("off"); s.a2.imshow(mpimg.imread(r["map_img"])); s.a2.axis("off"); s.canvas.draw()
@@ -659,6 +739,168 @@ class HotkeysDialog(QtWidgets.QDialog):
         for i, (key, desc) in enumerate(hotkeys): table.setItem(i, 0, QtWidgets.QTableWidgetItem(key)); table.setItem(i, 1, QtWidgets.QTableWidgetItem(desc))
         layout.addWidget(table); btn = QtWidgets.QPushButton("Закрыть"); btn.clicked.connect(s.close); layout.addWidget(btn)
 
+class AboutDialog(QtWidgets.QDialog):
+    def __init__(s, parent=None):
+        super().__init__(parent); s.setWindowTitle("О программе"); s.setFixedSize(500, 350)
+        layout = QtWidgets.QVBoxLayout(s)
+        
+        title = QtWidgets.QLabel("Prometheus Core")
+        title.setStyleSheet("font-size: 24px; font-weight: bold; color: #2e7d32;")
+        title.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        
+        version = QtWidgets.QLabel("Версия 4.0.0 (Dev)")
+        version.setStyleSheet("font-size: 14px; color: #888888;")
+        version.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        
+        desc = QtWidgets.QLabel(
+            "Инженерный симулятор переноса излучения.\n"
+            "Монте-Карло (гамма), Бете-Блох (заряженные частицы),\n"
+            "OpenMC (нейтроны).\n\n"
+            "Технологии: Python 3.13, PySide6, Numba, PyVista.\n"
+            "Верификация: NIST XCOM, PSTAR, SRIM.\n\n"
+            "Автор: [Твое Имя и Фамилия]\n"
+            "GitHub: github.com/conf3rence/prometheus-core"
+        )
+        desc.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        desc.setStyleSheet("font-size: 13px; line-height: 1.5;")
+        
+        btn = QtWidgets.QPushButton("Закрыть"); btn.clicked.connect(s.accept)
+        
+        layout.addWidget(title); layout.addWidget(version); layout.addSpacing(20)
+        layout.addWidget(desc); layout.addStretch(); layout.addWidget(btn)
+
+# ==========================================
+# СИСТЕМА ТЕСТИРОВАНИЯ (Dev)
+# ==========================================
+class TestWorker(QtCore.QThread):
+    log_msg = QtCore.Signal(str)
+    finished = QtCore.Signal(bool)
+
+    def run(s):
+        import numpy as np
+        import json
+        
+        try:
+            s.log_msg.emit("[СИСТЕМА] Запуск самодиагностики Prometheus Core...\n")
+            
+            # 1. Проверка зависимостей
+            s.log_msg.emit("[1/4] Проверка импорта библиотек...")
+            import PySide6, numba, xraylib, pyvista, matplotlib
+            s.log_msg.emit("  -> OK: Все зависимости на месте.\n")
+            
+            # 2. Проверка базы данных
+            s.log_msg.emit("[2/4] Проверка базы данных (materials.json)...")
+            import physics as P
+            err_count = 0
+            
+            # Берем уже загруженные данные из physics.py
+            for name, d in P.GAMMA_MATS.items():
+                mu = np.array(d.get("mu", []))
+                if len(mu) == 0 or np.any(mu <= 0) or np.any(np.isnan(mu)):
+                    s.log_msg.emit(f"  -> ОШИБКА: Материал {name} содержит нули или NaN!")
+                    err_count += 1
+                    
+            if err_count == 0:
+                s.log_msg.emit("  -> OK: База данных корректна (нет нулей и NaN).\n")
+            else:
+                raise ValueError("База данных содержит ошибки.")
+            
+            # 3. Верификация NIST
+            s.log_msg.emit("[3/4] Верификация NIST XCOM...")
+            import validator
+            def val_cb(msg, level="info"):
+                if "ИТОГ:" in msg or "ОШИБКА" in msg:
+                    s.log_msg.emit(f"  {msg}")
+            report = validator.run_validation(log_cb=val_cb)
+            if "СИСТЕМА ВЕРИФИЦИРОВАНА" not in report:
+                raise ValueError("Тесты NIST не пройдены.")
+            s.log_msg.emit("  -> OK: Все тесты NIST пройдены (расхождение < 0.1%).\n")
+            
+            # 4. Быстрый тест Монте-Карло
+            s.log_msg.emit("[4/4] Тест ядра Монте-Карло (1000 историй)...")
+            import physics as P
+            import time
+            t0 = time.time()
+            mat = P.make_gamma_mat("lead")
+            spec = P.ISOTOPES["Cs-137"]["lines"]
+            res = P.gamma_mc(mat=mat, R=5.0, spec_lines=spec, n_hist=1000, geom="sphere")
+            if res is None or "dose" not in res:
+                raise ValueError("Ядро Монте-Карло вернуло пустой результат.")
+            s.log_msg.emit(f"  -> OK: Ядро работает (время: {time.time()-t0:.2f} сек).\n")
+            
+            s.log_msg.emit("=========================================")
+            s.log_msg.emit("ВСЕ ТЕСТЫ УСПЕШНО ПРОЙДЕНЫ! СИСТЕМА ГОТОВА К РАБОТЕ.")
+            s.log_msg.emit("=========================================")
+            s.finished.emit(True)
+            
+        except Exception as e:
+            s.log_msg.emit(f"\n[КРИТИЧЕСКАЯ ОШИБКА] {type(e).__name__}: {e}")
+            s.finished.emit(False)
+
+
+class TestSuiteDialog(QtWidgets.QDialog):
+    def __init__(s, parent=None):
+        super().__init__(parent)
+        s.setWindowTitle("Центр верификации и тестирования")
+        s.resize(800, 600)
+        
+        layout = QtWidgets.QVBoxLayout(s)
+        
+        # Панель с кнопками
+        btn_layout = QtWidgets.QHBoxLayout()
+        s.btn_run = QtWidgets.QPushButton("▶ Запустить все тесты")
+        s.btn_run.setStyleSheet("background:#1565c0;color:white;font-weight:bold;padding:8px;")
+        s.btn_run.clicked.connect(s.run_tests)
+        
+        s.btn_clear = QtWidgets.QPushButton("🗑 Очистить консоль")
+        s.btn_clear.setStyleSheet("padding:8px;")
+        s.btn_clear.clicked.connect(lambda: s.console.clear())
+        
+        btn_layout.addWidget(s.btn_run)
+        btn_layout.addWidget(s.btn_clear)
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+        
+        # Консоль
+        s.console = QtWidgets.QTextEdit()
+        s.console.setReadOnly(True)
+        s.console.setStyleSheet("""
+            background-color: #0d0d0d; 
+            color: #d4d4d4; 
+            font-family: Consolas, monospace; 
+            font-size: 13px; 
+            border: 1px solid #333;
+        """)
+        layout.addWidget(s.console)
+        
+        # Статус
+        s.lbl_status = QtWidgets.QLabel("Готов к проверке.")
+        s.lbl_status.setStyleSheet("font-weight: bold; color: #888;")
+        layout.addWidget(s.lbl_status)
+        
+        s.worker = None
+
+    def run_tests(s):
+        if s.worker and s.worker.isRunning(): return
+        s.console.clear()
+        s.btn_run.setEnabled(False)
+        s.lbl_status.setText("Выполняется тестирование...")
+        s.lbl_status.setStyleSheet("font-weight: bold; color: #ffa726;")
+        
+        s.worker = TestWorker()
+        s.worker.log_msg.connect(s.console.append)
+        s.worker.finished.connect(s.on_finished)
+        s.worker.start()
+        
+    def on_finished(s, success):
+        s.btn_run.setEnabled(True)
+        if success:
+            s.lbl_status.setText("СТАТУС: ВСЕ ТЕСТЫ ПРОЙДЕНЫ (OK)")
+            s.lbl_status.setStyleSheet("font-weight: bold; color: #66bb6a;")
+        else:
+            s.lbl_status.setText("СТАТУС: ОБНАРУЖЕНЫ ОШИБКИ")
+            s.lbl_status.setStyleSheet("font-weight: bold; color: #ef5350;")
+
 class Main(QtWidgets.QMainWindow):
     def __init__(s):
         super().__init__()
@@ -668,9 +910,28 @@ class Main(QtWidgets.QMainWindow):
         act_load = QtGui.QAction("Загрузить (Ctrl+O)", s); act_load.triggered.connect(s.load_session); file_menu.addAction(act_load)
         file_menu.addSeparator(); act_exit = QtGui.QAction("Выход", s); act_exit.triggered.connect(s.close); file_menu.addAction(act_exit)
         view_menu = menubar.addMenu("Вид"); act_theme = QtGui.QAction("Сменить тему (Ctrl+T)", s); act_theme.triggered.connect(s.toggle_theme); view_menu.addAction(act_theme)
-        help_menu = menubar.addMenu("Справка"); act_hotkeys = QtGui.QAction("Горячие клавиши (F1)", s); act_hotkeys.triggered.connect(s.show_hotkeys); help_menu.addAction(act_hotkeys); help_menu.addSeparator(); act_val = QtGui.QAction("Верификация NIST", s); act_val.triggered.connect(s.run_validation); help_menu.addAction(act_val)
+        help_menu = menubar.addMenu("Справка")
+        act_hotkeys = QtGui.QAction("Горячие клавиши (F1)", s)
+        act_hotkeys.triggered.connect(s.show_hotkeys)
+        help_menu.addAction(act_hotkeys)
         
-        s.con=QtWidgets.QPlainTextEdit(); s.con.setReadOnly(True); s.con.setMaximumHeight(200); s.con.setStyleSheet("font-family:Consolas;font-size:12px;background:#1e1e1e;color:#d4d4d4;")
+        help_menu.addSeparator()
+        
+        act_tests = QtGui.QAction("Центр верификации и тестов...", s)
+        act_tests.triggered.connect(lambda: TestSuiteDialog(s).exec())
+        help_menu.addAction(act_tests)
+        
+        act_val = QtGui.QAction("Верификация NIST", s)
+        act_val.triggered.connect(s.run_validation)
+        help_menu.addAction(act_val)
+        
+        help_menu.addSeparator()
+        
+        act_about = QtGui.QAction("О программе", s)
+        act_about.triggered.connect(lambda: AboutDialog(s).exec())
+        help_menu.addAction(act_about)
+        # Меняем QPlainTextEdit на QTextEdit для поддержки HTML (цветов)
+        s.con=QtWidgets.QTextEdit(); s.con.setReadOnly(True); s.con.setMaximumHeight(200); s.con.setStyleSheet("font-family:Consolas;font-size:12px;background:#1e1e1e;color:#d4d4d4;")
         P.attach_log_widget(s.con); P.setup_log_file(OUT)
         def console(m): P.plog(m)
         
@@ -678,11 +939,28 @@ class Main(QtWidgets.QMainWindow):
         s.gentab = GeneratorTab(console, s.gtab); s.sandbox = SandboxTab(console); s.clitab = CliTab(console)
         
         tabs=QtWidgets.QTabWidget()
-        tabs.addTab(s.gtab,"☢️ Гамма"); tabs.addTab(s.ctab,"⚙️ Заряженные"); tabs.addTab(s.ntab,"🔬 Нейтроны")
+        tabs.addTab(s.gtab,"☢️ Гамма"); tabs.addTab(s.ctab,"⚙️ Заряженные")
+        
+        if not LITE_MODE:
+            tabs.addTab(s.ntab,"🔬 Нейтроны")
+            
         tabs.addTab(s.gentab, "🧪 Генератор"); tabs.addTab(s.sandbox,"🏖️ Песочница"); tabs.addTab(s.clitab, "💻 CLI-Конструктор")
         tabl=s._mat_table(); tabs.addTab(tabl,"📋 Таблица материалов")
         
-        c=QtWidgets.QWidget(); v=QtWidgets.QVBoxLayout(c); v.addWidget(tabs,1); v.addWidget(QtWidgets.QLabel("ЛОГ:")); v.addWidget(s.con); s.setCentralWidget(c)
+        c=QtWidgets.QWidget(); v=QtWidgets.QVBoxLayout(c); v.addWidget(tabs,1); 
+        
+        # Панель лога с кнопкой очистки
+        log_panel = QtWidgets.QHBoxLayout()
+        log_panel.addWidget(QtWidgets.QLabel("СИСТЕМНЫЙ ЛОГ:"))
+        log_panel.addStretch()
+        btn_clear_main_log = QtWidgets.QPushButton("🗑 Очистить")
+        btn_clear_main_log.setStyleSheet("padding: 2px 8px; font-size: 11px;")
+        btn_clear_main_log.clicked.connect(s.con.clear)
+        log_panel.addWidget(btn_clear_main_log)
+        
+        v.addLayout(log_panel)
+        v.addWidget(s.con)
+        s.setCentralWidget(c)
         s.status = s.statusBar(); s.status.showMessage(f"Готово | Материалов: {len(P.GAMMA_MATS)} | Изотопов: {len(P.ISOTOPES)}")
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+R"), s, activated=s.run_active_tab); QtGui.QShortcut(QtGui.QKeySequence("Ctrl+E"), s, activated=s.export_active_tab); QtGui.QShortcut(QtGui.QKeySequence("Ctrl+S"), s, activated=s.save_session); QtGui.QShortcut(QtGui.QKeySequence("Ctrl+O"), s, activated=s.load_session); QtGui.QShortcut(QtGui.QKeySequence("Ctrl+T"), s, activated=s.toggle_theme); QtGui.QShortcut(QtGui.QKeySequence("F1"), s, activated=s.show_hotkeys)
         s.tabs = tabs
@@ -734,6 +1012,28 @@ class Main(QtWidgets.QMainWindow):
 
 def main():
     app=QtWidgets.QApplication(sys.argv); app.setStyle("Fusion")
+    
+    # Создаем заставку (Splash Screen)
+    pixmap = QtGui.QPixmap(500, 250)
+    pixmap.fill(QtGui.QColor("#1e1e1e")) # Темный фон
+    painter = QtGui.QPainter(pixmap)
+    
+    # Рисуем текст на заставке
+    painter.setPen(QtGui.QColor("#2e7d32"))
+    painter.setFont(QtGui.QFont("Consolas", 28, QtGui.QFont.Bold))
+    painter.drawText(pixmap.rect(), QtCore.Qt.AlignmentFlag.AlignCenter, "PROMETHEUS CORE")
+    
+    painter.setPen(QtGui.QColor("#d4d4d4"))
+    painter.setFont(QtGui.QFont("Consolas", 12))
+    painter.drawText(pixmap.rect().adjusted(0, 60, 0, 0), QtCore.Qt.AlignmentFlag.AlignCenter, "Инициализация JIT-компилятора...")
+    painter.end()
+
+    # Показываем заставку
+    splash = QtWidgets.QSplashScreen(pixmap)
+    splash.show()
+    app.processEvents() # Принудительно отрисовываем заставку
+    
+    # Применяем стили
     app.setStyleSheet("""
         QComboBox { background-color: #2b2b2b; color: #ffffff; border: 1px solid #555555; border-radius: 4px; padding: 4px 8px; }
         QComboBox:hover { border: 1px solid #2e7d32; }
@@ -742,7 +1042,12 @@ def main():
         QHeaderView::section { background-color: #1e1e1e; color: #ffffff; padding: 4px; border: 1px solid #444444; }
         QToolTip { background-color: #2b2b2b; color: #ffffff; border: 1px solid #2e7d32; }
     """)
-    w=Main(); w.showMaximized(); sys.exit(app.exec())
+    
+    w = Main()
+    w.showMaximized()
+    splash.finish(w) # Закрываем заставку, когда главное окно готово
+    
+    sys.exit(app.exec())
 
 if __name__=="__main__":
     mp.freeze_support()

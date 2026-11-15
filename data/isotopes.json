@@ -51,6 +51,16 @@
   "Cf-252": {"lines":[[0.043,0.001],[0.100,0.0001]], "half_life_s": 230400.0},
   "Sr-90":  {"lines":[[0.546,1.0]], "half_life_s": 908928000.0, "_note": "Beta emitter, no gamma lines"},
   "Y-90":   {"lines":[[2.280,0.9999]], "half_life_s": 230400.0, "_note": "Beta emitter, no gamma lines"},
+  "Ir-192": {"lines":[[0.3165,0.828],[0.4681,0.478],[0.6041,0.082]], "half_life_s": 6379920.0},
+  "Eu-152": {"lines":[[0.1218,0.284],[0.3444,0.265],[1.408,0.209]], "half_life_s": 426539520.0},
+  "Ba-133": {"lines":[[0.356,0.62],[0.081,0.34]], "half_life_s": 332932800.0},
+  "Tc-99m": {"lines":[[0.1405,0.885]], "half_life_s": 21625.2},
+  "I-131":  {"lines":[[0.3645,0.815]], "half_life_s": 693360.0},
+  "F-18":   {"lines":[[0.511,1.934]], "half_life_s": 6588.0},
+  "Lu-177": {"lines":[[0.2084,0.110],[0.1129,0.064]], "half_life_s": 574300.8},
+  "P-32":   {"lines":[[0.000,0.0]], "half_life_s": 1233792.0, "_note": "Pure beta emitter"},
+  "Am-Be":  {"lines":[[0.000,0.0]], "half_life_s": 1.36e10, "_note": "Neutron source (alpha,n)"},
+  "Pu-Be":  {"lines":[[0.000,0.0]], "half_life_s": 7.61e11, "_note": "Neutron source (alpha,n)"},
   "U-235": {
     "lines": [
       [0.1857, 0.572],

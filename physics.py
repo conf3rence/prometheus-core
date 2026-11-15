@@ -2,16 +2,28 @@
 physics.py — физическое ядро Prometheus Core v3
 Многослойность, Поляризация, Backscatter + мост в wsl/openmc.
 """
-import os, sys, math, json, subprocess, tempfile, datetime, logging, shutil
+import multiprocessing as mp
+from functools import lru_cache
+import os
+import sys
+import math
+import json
+import subprocess
+import tempfile
+import datetime
+import logging
+import shutil
 import numpy as np
 try:
     from numba import njit
     HAS_NUMBA = True
 except ImportError:
     HAS_NUMBA = False
+
     def njit(*args, **kwargs):
         if len(args) == 1 and callable(args[0]) and not kwargs:
             return args[0]
+
         def decorator(f): return f
         return decorator
 
@@ -22,76 +34,83 @@ else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 DATA_DIR = os.path.join(BASE_DIR, "data")
-if getattr(sys, 'frozen', False): OUT_DIR = os.path.join(os.path.dirname(sys.executable), "output")
+if getattr(sys, 'frozen', False): OUT_DIR = os.path.join(
+    os.path.dirname(sys.executable), "output")
 else: OUT_DIR = os.path.join(BASE_DIR, "output")
 
-MEC2=0.510998950; RE=2.8179403262e-13; MEV_TO_J=1.602176634e-13
-ME=0.510998950; MP=938.272089; MALPHA=3727.379; K_BB=0.307075
-_Y=365.25*24*3600; _D=86400; _H=3600
+MEC2 = 0.510998950; RE = 2.8179403262e-13; MEV_TO_J = 1.602176634e-13
+ME = 0.510998950; MP = 938.272089; MALPHA = 3727.379; K_BB = 0.307075
+_Y = 365.25*24*3600; _D = 86400; _H = 3600
+
 
 def _load(fname):
     p = os.path.join(DATA_DIR, fname)
     if not os.path.isfile(p): raise FileNotFoundError(f"Не найден файл: {p}")
     with open(p, encoding="utf-8") as f: return json.load(f)
 
+
 _MAT_RAW = _load("materials.json")
 _ISO_RAW = _load("isotopes.json")
 GAMMA_MATS = {k: v for k, v in _MAT_RAW.items() if not k.startswith("_")}
-ISOTOPES   = {k: v for k, v in _ISO_RAW.items() if not k.startswith("_")}
+ISOTOPES = {k: v for k, v in _ISO_RAW.items() if not k.startswith("_")}
 
 ACTIVITY_U = {
     # СИ (Беккерель)
-    "мкБк": 1e-6, "мБк": 1e-3, "Бк": 1.0, "кБк": 1e3, "МБк": 1e6, 
+    "мкБк": 1e-6, "мБк": 1e-3, "Бк": 1.0, "кБк": 1e3, "МБк": 1e6,
     "ГБк": 1e9, "ТБк": 1e12, "ПБк": 1e15, "ЭБк": 1e18,
     # Внесистемные (Кюри)
-    "нКи": 37.0, "мкКи": 3.7e4, "мКи": 3.7e7, "Ки": 3.7e10, 
+    "нКи": 37.0, "мкКи": 3.7e4, "мКи": 3.7e7, "Ки": 3.7e10,
     "кКи": 3.7e13, "МКи": 3.7e16, "ГКи": 3.7e19
 }
 
-TIME_U     = {"с":1.0,"мин":60.0,"ч":3600.0,"сут":86400.0,"год":_Y}
+TIME_U = {"с": 1.0, "мин": 60.0, "ч": 3600.0, "сут": 86400.0, "год": _Y}
 
 CP_MAT = {
     "вода": {"Z": 7.42, "A": 18.015, "rho": 1.0, "I": 75.0, "ZA": 0.5551},
     "воздух": {"Z": 7.64, "A": 14.4, "rho": 0.001205, "I": 85.7},
     "ткань": {"Z": 7.5, "A": 18.0, "rho": 1.06, "I": 74.9},
     "кость": {"Z": 13.8, "A": 28.0, "rho": 1.92, "I": 91.9},
-    "мышца": {"Z": 7.4, "A": 17.0, "rho": 1.04, "I": 74.0},
-    "кожа": {"Z": 7.3, "A": 16.0, "rho": 1.09, "I": 72.0},
     "алюминий": {"Z": 13, "A": 26.98, "rho": 2.70, "I": 166.0},
-    "кремний": {"Z": 14, "A": 28.09, "rho": 2.33, "I": 173.0},
-    "титан": {"Z": 22, "A": 47.87, "rho": 4.54, "I": 233.0},
     "железо": {"Z": 26, "A": 55.845, "rho": 7.874, "I": 286.0},
-    "сталь": {"Z": 26, "A": 55.8, "rho": 7.85, "I": 286.0},
     "медь": {"Z": 29, "A": 63.55, "rho": 8.96, "I": 322.0},
-    "цинк": {"Z": 30, "A": 65.38, "rho": 7.14, "I": 330.0},
-    "серебро": {"Z": 47, "A": 107.87, "rho": 10.49, "I": 470.0},
     "вольфрам": {"Z": 74, "A": 183.84, "rho": 19.30, "I": 727.0},
-    "золото": {"Z": 79, "A": 196.97, "rho": 19.32, "I": 790.0},
     "свинец": {"Z": 82, "A": 207.2, "rho": 11.35, "I": 823.0},
     "уран": {"Z": 92, "A": 238.03, "rho": 18.95, "I": 890.0},
     "полиэтилен": {"Z": 5.53, "A": 13.0, "rho": 0.94, "I": 57.4},
     "графит": {"Z": 6, "A": 12.011, "rho": 1.70, "I": 78.0},
     "бетон": {"Z": 11.0, "A": 22.0, "rho": 2.30, "I": 135.0},
-    "литий": {"Z": 3, "A": 6.94, "rho": 0.534, "I": 40.0},
-    "бериллий": {"Z": 4, "A": 9.012, "rho": 1.85, "I": 63.7},
-    "бор": {"Z": 5, "A": 10.81, "rho": 2.34, "I": 76.0},
-    "боркарбид": {"Z": 5.3, "A": 11.2, "rho": 2.52, "I": 78.0},
+    "цирконий": {"Z": 40, "A": 91.22, "rho": 6.56, "I": 393.0},
+    "сталь_304": {"Z": 25.7, "A": 55.0, "rho": 8.0, "I": 282.0},
+    "инконель": {"Z": 27.5, "A": 58.0, "rho": 8.4, "I": 300.0},
+    "титан": {"Z": 22, "A": 47.87, "rho": 4.43, "I": 233.0},
+    "бористая_сталь": {"Z": 25.5, "A": 54.0, "rho": 7.8, "I": 280.0},
+    "кадмий": {"Z": 48, "A": 112.41, "rho": 8.65, "I": 469.0},
+    "гадолиний": {"Z": 64, "A": 157.25, "rho": 7.9, "I": 591.0},
+    "висмут": {"Z": 83, "A": 208.98, "rho": 9.78, "I": 823.0},
+    "жидкий_натрий": {"Z": 11, "A": 22.99, "rho": 0.93, "I": 149.0},
 }
-PARTICLES = {"протон": (MP,1), "альфа": (MALPHA, 2), "дейтрон": (2*MP, 1), "электрон": (ME, 1)}
+PARTICLES = {"протон": (MP, 1), "альфа": (MALPHA, 2),
+                        "дейтрон": (2*MP, 1), "электрон": (ME, 1)}
+
 
 class GammaMaterial:
     NT = 20000
+
     def __init__(self, name, d):
-        self.name, self.Z, self.A, self.density = name, float(d["Z"]), float(d["A"]), float(d["rho"])
-        E= np.asarray(d["E"],float); mu = np.asarray(d["mu"], float)
+        self.name, self.Z, self.A, self.density = name, float(
+            d["Z"]), float(d["A"]), float(d["rho"])
+        E = np.asarray(d["E"], float); mu = np.asarray(d["mu"], float)
         mu_pe = np.asarray(d.get("mu_pe", np.zeros_like(mu)), float)
         mu_comp = np.asarray(d.get("mu_comp", np.zeros_like(mu)), float)
         mu_pair = np.asarray(d.get("mu_pair", np.zeros_like(mu)), float)
         mu_coh = np.asarray(d.get("mu_coh", np.zeros_like(mu)), float)
-        
-        self._lE= np.log(E); self._lMu = np.log(mu)
-        self._lMu_pe = np.log(np.maximum(mu_pe, 1e-15)); self._lMu_comp = np.log(np.maximum(mu_comp, 1e-15))
-        self._lMu_pair = np.log(np.maximum(mu_pair, 1e-15)); self._lMu_coh = np.log(np.maximum(mu_coh, 1e-15))
+
+        self._lE = np.log(np.maximum(E, 1e-10))
+        self._lMu = np.log(np.maximum(mu, 1e-15))
+        self._lMu_pe = np.log(np.maximum(
+            mu_pe, 1e-15)); self._lMu_comp = np.log(np.maximum(mu_comp, 1e-15))
+        self._lMu_pair = np.log(np.maximum(
+            mu_pair, 1e-15)); self._lMu_coh = np.log(np.maximum(mu_coh, 1e-15))
         self.Emin, self.Emax = float(E[0]), float(E[-1])
         self._build()
 
@@ -102,7 +121,7 @@ class GammaMaterial:
         mu_pe = np.exp(np.interp(lE, self._lE, self._lMu_pe))
         mu_comp = np.exp(np.interp(lE, self._lE, self._lMu_comp))
         mu_coh = np.exp(np.interp(lE, self._lE, self._lMu_coh))
-        
+
         self._tm = mu_total * self.density
         safe_mu = np.where(mu_total > 0, mu_total, 1e-30)
         self._c1 = mu_pe / safe_mu
@@ -118,10 +137,11 @@ class GammaMaterial:
         m, a, b = self._tm, self._c1, self._c2
         return (m[i]+(m[i+1]-m[i])*f, a[i]+(a[i+1]-a[i])*f, b[i]+(b[i+1]-b[i])*f)
 
-    def mu_rho(self, E): return float(np.exp(np.interp(math.log(E), self._lE, self._lMu)))
+    def mu_rho(self, E): return float(
+        np.exp(np.interp(math.log(E), self._lE, self._lMu)))
+
     def macro(self, E): return self.mu_rho(E) * self.density
 
-from functools import lru_cache
 
 @lru_cache(maxsize=128)
 def make_gamma_mat(name): return GammaMaterial(name, GAMMA_MATS[name])
@@ -129,20 +149,26 @@ def make_gamma_mat(name): return GammaMaterial(name, GAMMA_MATS[name])
 
 class RandBuf:
     def __init__(self, rng, size=1 << 16):
-        self.rng = rng; self.size = size; self.buf = rng.random(size); self.i = 0
+        self.rng = rng; self.size = size; self.buf = rng.random(
+            size); self.i = 0
+
     def __call__(self):
-        if self.i >= self.size: self.buf = self.rng.random(self.size); self.i = 0
+        if self.i >= self.size: self.buf = self.rng.random(
+            self.size); self.i = 0
         v = self.buf[self.i]; self.i += 1
         return v
+
 
 def _rotate(d, mu, phi):
     st = math.sqrt(max(0.0, 1 - mu*mu))
     dx, dy, dz = d
     perp = math.sqrt(max(1e-12, 1 - dz*dz))
     cp, sp = math.cos(phi), math.sin(phi)
-    nx = dx*mu + st*(dx*dz*cp - dy*sp)/perp; ny = dy*mu + st*(dy*dz*cp + dx*sp)/perp
-    nz = dz*mu - st*perp*cp; n= math.sqrt(nx*nx + ny*ny + nz*nz)
+    nx = dx*mu + st*(dx*dz*cp - dy*sp)/perp; ny = dy * \
+                     mu + st*(dy*dz*cp + dx*sp)/perp
+    nz = dz*mu - st*perp*cp; n = math.sqrt(nx*nx + ny*ny + nz*nz)
     return np.array([nx/n, ny/n, nz/n])
+
 
 @njit(cache=False)
 def _interp_log_nb(E, t0, sc, tm, c1, c2):
@@ -154,6 +180,7 @@ def _interp_log_nb(E, t0, sc, tm, c1, c2):
     return (tm[i] + (tm[i+1] - tm[i]) * f,
             c1[i] + (c1[i+1] - c1[i]) * f,
             c2[i] + (c2[i+1] - c2[i]) * f)
+
 
 @njit(cache=False)
 def _mc_core_numba(n_hist, seed, is_slab, R,
@@ -179,42 +206,44 @@ def _mc_core_numba(n_hist, seed, is_slab, R,
             if r <= cdf[j]: idx = j; break
         E0 = Es[idx]
         px, py, pz = 0.0, 0.0, 0.0
-        
+
         if is_slab: dx, dy, dz = 1.0, 0.0, 0.0
         else:
             ct = 2.0 * np.random.random() - 1.0
             st = np.sqrt(max(0.0, 1.0 - ct*ct))
             phi = 2.0 * np.pi * np.random.random()
             dx = st * np.cos(phi); dy = st * np.sin(phi); dz = ct
-        
+
         E = E0; eh = 0.0; is_uncollided = True; local_colls = 0
-        
+
         while True:
             if is_slab:
                 li = 0
                 for l in range(n_layers):
                     if px >= layer_starts[l] and px < layer_ends[l]: li = l; break
                 else: li = n_layers - 1
-                mac, c1, c2 = _interp_log_nb(E, t0_L[li], sc_L[li], tm_L[li], c1_L[li], c2_L[li])
+                mac, c1, c2 = _interp_log_nb(
+                    E, t0_L[li], sc_L[li], tm_L[li], c1_L[li], c2_L[li])
             else:
-                mac, c1, c2 = _interp_log_nb(E, t0_sph, sc_sph, tm_sph, c1_sph, c2_sph)
-            
+                mac, c1, c2 = _interp_log_nb(
+                    E, t0_sph, sc_sph, tm_sph, c1_sph, c2_sph)
+
             if E < 2.0 * MEC2: c2 = 1.0
             fp = -np.log(np.random.random()) / mac
-            
+
             if is_slab:
                 if dx > 1e-9:
                     db = (layer_ends[li] - px) / dx
                 elif dx < -1e-9:
                     db = (layer_starts[li] - px) / dx
-                else: 
+                else:
                     db = 1e12
             else:
                 b = px*dx + py*dy + pz*dz
                 c = px*px + py*py + pz*pz - R*R
                 disc = b*b - c
                 db = -b + np.sqrt(disc) if disc >= 0 else 1e12
-            
+
             if fp >= db:
                 px += db * dx; py += db * dy; pz += db * dz
                 if is_slab:
@@ -229,22 +258,23 @@ def _mc_core_numba(n_hist, seed, is_slab, R,
                     leak[leak_count] = E; leak_count += 1; nlk += 1
                     if is_uncollided: nlk_uncoll += 1
                     break
-            
+
             px += fp * dx; py += fp * dy; pz += fp * dz
             n_colls += 1; is_uncollided = False; local_colls += 1
             r = np.random.random()
-            
+
             if r < c1:
                 dep = E; eh += dep; nph += 1; final = True
             elif r < c2:
                 a = E / MEC2
                 while True:
                     r1 = np.random.random()
-                    if r1 < (1.0 + 2.0*a) / (9.0 + 2.0*a): eps = 1.0 + 2.0*a*np.random.random()
+                    if r1 < (1.0 + 2.0*a) / (9.0 + 2.0*a): eps = 1.0 + \
+                             2.0*a*np.random.random()
                     else: eps = (1.0 + 2.0*a) / (1.0 + 2.0*a*np.random.random())
                     mu_c = 1.0 - (eps - 1.0) / a
                     if np.random.random() < 1.0 - eps*(1.0 - mu_c*mu_c)/(1.0 + eps*eps): break
-                
+
                 theta_idx = int((mu_c + 1.0) * 45.0)
                 if theta_idx < 0: theta_idx = 0
                 elif theta_idx > 89: theta_idx = 89
@@ -265,7 +295,7 @@ def _mc_core_numba(n_hist, seed, is_slab, R,
                 if final: eh += E; dep += E
             else:
                 dep = E - 2.0 * MEC2; eh += dep; npa += 1; final = True
-            
+
             if is_slab:
                 ix = int(px * gsc); iz = int((pz + total_thick) * gsc / 2.0)
                 ri = min(int(px / dr), rad_n - 1)
@@ -273,17 +303,16 @@ def _mc_core_numba(n_hist, seed, is_slab, R,
                 ix = int((px + R) * gsc); iz = int((pz + R) * gsc)
                 r_pos = np.sqrt(px*px + py*py + pz*pz)
                 ri = min(int(r_pos / dr), rad_n - 1)
-            
+
             if 0 <= ix < ngrid and 0 <= iz < ngrid: g2[iz, ix] += dep
             rad_dep[ri] += dep
             if final: break
-        
+
         edep += eh; edepsq += eh * eh
         if local_colls < 30: coll_hist[local_colls] += 1
-    
+
     return (edep, edepsq, nph, nco, npa, nlk, nlk_uncoll, n_colls, g2, rad_dep, leak[:leak_count], coll_hist, theta_hist, backscatter_count)
 
-import multiprocessing as mp
 
 def _mc_worker(args):
     (n_hist, seed, is_slab, R,
@@ -297,6 +326,7 @@ def _mc_worker(args):
         Es, cdf, ngrid, gsc, rad_n, dr, e_cut
     )
 
+
 def gamma_mc(mat, R, spec_lines, n_hist, seed=42, ngrid=64, e_cut=0.001,
              n_tracks=50, progress=None, should_stop=None, geom="sphere", layers=None):
     if layers is None: layers = [(mat, R)]
@@ -304,9 +334,10 @@ def gamma_mc(mat, R, spec_lines, n_hist, seed=42, ngrid=64, e_cut=0.001,
     Es = np.array([l[0] for l in spec_lines], dtype=np.float64)
     ws = np.array([l[1] for l in spec_lines], dtype=np.float64)
     cdf = np.cumsum(ws / ws.sum()); cdf[-1] = 1.0
-    
+
     n_layers = len(layers)
-    tm_L = np.zeros((n_layers, mat.NT)); c1_L = np.zeros((n_layers, mat.NT)); c2_L = np.zeros((n_layers, mat.NT))
+    tm_L = np.zeros((n_layers, mat.NT)); c1_L = np.zeros(
+        (n_layers, mat.NT)); c2_L = np.zeros((n_layers, mat.NT))
     t0_L = np.zeros(n_layers); sc_L = np.zeros(n_layers)
     layer_starts = np.zeros(n_layers); layer_ends = np.zeros(n_layers)
     cur = 0.0
@@ -314,12 +345,13 @@ def gamma_mc(mat, R, spec_lines, n_hist, seed=42, ngrid=64, e_cut=0.001,
         tm_L[i] = l_mat._tm; c1_L[i] = l_mat._c1; c2_L[i] = l_mat._c2
         t0_L[i] = l_mat._t0; sc_L[i] = l_mat._sc
         layer_starts[i] = cur; cur += l_thick; layer_ends[i] = cur
-    
-    if geom == "slab": gsc = (ngrid - 1) / total_thick; rad_n = 40; dr = total_thick / rad_n
+
+    if geom == "slab": gsc = (ngrid - 1) / \
+                              total_thick; rad_n = 40; dr = total_thick / rad_n
     else: gsc = (ngrid - 1) / (2 * R); rad_n = 40; dr = R / rad_n
-    
+
     n_procs = 1  # <--- ПРИНУДИТЕЛЬНО 1 ПРОЦЕСС ДЛЯ GUI
-    
+
     if n_hist < 100000 or n_procs == 1:
         edep, edepsq, nph, nco, npa, nlk, nlk_uncoll, n_colls, g2, rad_dep, leak_arr, coll_hist, theta_hist, backscatter_count = _mc_worker((
             n_hist, seed, geom == "slab", R, mat._tm, mat._c1, mat._c2, mat._t0, mat._sc,
@@ -332,11 +364,12 @@ def gamma_mc(mat, R, spec_lines, n_hist, seed=42, ngrid=64, e_cut=0.001,
         hist_per_chunk = n_hist // n_chunks
         chunk_tasks = []
         for i in range(n_chunks):
-            count = hist_per_chunk if i < n_chunks - 1 else n_hist - (hist_per_chunk * (n_chunks - 1))
+            count = hist_per_chunk if i < n_chunks - \
+                1 else n_hist - (hist_per_chunk * (n_chunks - 1))
             chunk_tasks.append((count, seed + i, geom == "slab", R, mat._tm, mat._c1, mat._c2, mat._t0, mat._sc,
                                 n_layers, tm_L, c1_L, c2_L, t0_L, sc_L, layer_starts, layer_ends, total_thick,
                                 Es, cdf, ngrid, gsc, rad_n, dr, e_cut))
-        
+
         results = []
         with mp.Pool(processes=n_procs) as pool:
             for i, task in enumerate(chunk_tasks):
@@ -345,41 +378,87 @@ def gamma_mc(mat, R, spec_lines, n_hist, seed=42, ngrid=64, e_cut=0.001,
                     break
                 results.append(pool.apply(_mc_worker, (task,)))
                 if progress: progress((i + 1) / n_chunks)
-        
+            if not results:
+                # <--- ДОБАВЬ ЭТУ СТРОКУ
+                print("DEBUG: РАСЧЕТ БЫЛ ОТМЕНЕН, ВОЗВРАЩАЕМ NONE!")
+                return None
         if not results:
             return None  # расчёт отменён пользователем
-        
+
         edep = sum(r[0] for r in results); edepsq = sum(r[1] for r in results)
-        nph = sum(r[2] for r in results); nco = sum(r[3] for r in results); npa = sum(r[4] for r in results)
-        nlk = sum(r[5] for r in results); nlk_uncoll = sum(r[6] for r in results); n_colls = sum(r[7] for r in results)
+        nph = sum(r[2] for r in results); nco = sum(r[3]
+                  for r in results); npa = sum(r[4] for r in results)
+        nlk = sum(r[5] for r in results); nlk_uncoll = sum(r[6]
+                  for r in results); n_colls = sum(r[7] for r in results)
         g2 = sum(r[8] for r in results); rad_dep = sum(r[9] for r in results)
         leak_arr = np.concatenate([r[10] for r in results])
         coll_hist = sum(r[11] for r in results)
         theta_hist = sum(r[12] for r in results)
         backscatter_count = sum(r[13] for r in results)
-    
+
     n = max(n_hist, 1); mean = edep / n; var = (edepsq/n - mean*mean) / n
     rel = math.sqrt(max(var, 0)) / mean if mean > 0 else 0.0
-    
+
     if geom == "slab": mass = sum(l[1] * l[0].density for l in layers) / 1000.0
     else: mass = (4/3*math.pi*R**3) * mat.density / 1000.0
     dose = mean * MEV_TO_J / mass if mass > 0 else 0.0
-    
+
     meanE = float(np.mean(Es)) if len(Es) > 0 else 0.0
     mu_v = layers[0][0].macro(max(meanE, layers[0][0].Emin))
-    
+
     if geom == "slab":
         theor_escape = 1.0
-        for l_mat, l_thick in layers: theor_escape *= np.exp(-l_mat.macro(max(meanE, l_mat.Emin)) * l_thick)
+        for l_mat, l_thick in layers: theor_escape *= np.exp(-l_mat.macro(
+            max(meanE, l_mat.Emin)) * l_thick)
     else: theor_escape = np.exp(-mu_v * R)
-    
+
     r_c = (np.arange(rad_n) + 0.5) * dr
-    if geom == "slab": smass = np.full(rad_n, dr * sum(l[0].density for l in layers)) / 1000.0
-    else: smass = (4/3*np.pi*((np.arange(1,rad_n+1)*dr)**3-(np.arange(rad_n)*dr)**3)) * mat.density / 1000.0
-    
-    with np.errstate(divide="ignore", invalid="ignore"): rad_dose = np.where(smass>0, rad_dep*MEV_TO_J/smass/n, 0.0)
+
+    # Для slab: строим массив плотностей по глубине
+    if geom == "slab":
+        # Определяем границы слоёв
+        layer_bounds = []
+        cur = 0.0
+        for l_mat, l_thick in layers:
+            layer_bounds.append((cur, cur + l_thick, l_mat.density))
+            cur += l_thick
+
+        smass = np.zeros(rad_n)
+        for i in range(rad_n):
+            depth = r_c[i]
+            for start, end, rho in layer_bounds:
+                if start <= depth < end:
+                    smass[i] = dr * rho / 1000.0
+                    break
+            else:
+                smass[i] = dr * layers[-1][0].density / 1000.0  # fallback
+    else:
+        smass = (4/3*np.pi*((np.arange(1, rad_n+1)*dr)**3 -
+                 (np.arange(rad_n)*dr)**3)) * mat.density / 1000.0
+
+    with np.errstate(divide="ignore", invalid="ignore"): rad_dose = np.where(
+        smass > 0, rad_dep*MEV_TO_J/smass/n, 0.0)
     src_e_plot = np.random.choice(Es, size=min(n_hist, 10000), p=ws/ws.sum())
-    
+
+    # --- Шаг 2: Расчет дозы в детекторе (последний слой) ---
+    if geom == "slab":
+        # Берем границы последнего слоя из layer_bounds
+        det_start = layer_bounds[-1][0]
+        det_end = layer_bounds[-1][1]
+        # Находим индексы глубин (r_c), которые попадают в этот слой
+        det_indices = np.where((r_c >= det_start) & (r_c < det_end))[0]
+        
+        if len(det_indices) > 0:
+            det_energy = rad_dep[det_indices].sum()
+            det_mass = smass[det_indices].sum()
+            dose_detector = (det_energy * MEV_TO_J / det_mass / n) if det_mass > 0 else 0.0
+        else:
+            # Если слой слишком тонкий и не попал в бины, берем самый последний бин
+            dose_detector = rad_dose[-1] if len(rad_dose) > 0 else 0.0
+    else:
+        # Для сферы детектор - это поверхность сферы (последний бин)
+        dose_detector = rad_dose[-1] if len(rad_dose) > 0 else 0.0
+
     return {
         "mean":mean, "rel":rel, "dose":dose, "dose_eq":dose,
         "meanE":meanE, "abs":mean/meanE if meanE>0 else 0,
@@ -387,12 +466,15 @@ def gamma_mc(mat, R, spec_lines, n_hist, seed=42, ngrid=64, e_cut=0.001,
         "nlk_uncoll":nlk_uncoll, "n_colls":n_colls, "backscatter_count":backscatter_count,
         "leak":leak_arr, "src":src_e_plot, "grid":g2/n, "R": total_thick, "geom": geom,
         "coll_hist": coll_hist, "theta_hist": theta_hist,
-        "r":r_c, "rad_dose":rad_dose, "mu":mu_v, "theor_escape": theor_escape, 
+        "r":r_c, "rad_dose":rad_dose, "mu":mu_v, "theor_escape": theor_escape,
         "mfp":1/mu_v if mu_v>0 else 0, "hvl":math.log(2)/mu_v if mu_v>0 else 0,
         "mu_rho": mat.mu_rho(max(meanE, mat.Emin)),
+        "dose_avg": dose,               # Средняя доза по всему объему
+        "dose_detector": dose_detector, # Доза за защитой (в детекторе)
     }
 def attenuation_curve(mat, spec_lines, n_hist, thicknesses, seed=42):
     """Возвращает [(thickness, transmission_model, transmission_theory)] для построения кривой ослабления"""
+    results = []
     results = []
     mean_E = float(np.mean([l[0] for l in spec_lines])) if spec_lines else mat.Emin
     mu_macro = mat.macro(max(mean_E, mat.Emin))
@@ -412,7 +494,7 @@ def absolute_dose(res, activity, act_unit, time, time_unit, use_decay, iso_name)
         gpd = sum(l[1] for l in iso["lines"])
         hl = iso.get("half_life_s", 0.0)
         lam = math.log(2) / hl if hl > 0 else 0.0
-    else: 
+    else:  # <--- ВОТ ЗДЕСЬ ОШИБКА (строка 459)
         gpd = 1.0
         lam = 0.0
         
@@ -584,42 +666,34 @@ import openmc
 C = json.loads(os.environ["PROM_CFG"])
 
 def build_mat(name):
+    m = openmc.Material()
     if name == "water":
-        m = openmc.Material()
-        m.add_nuclide("H1", 2); m.add_nuclide("O16", 1)
-        m.set_density("g/cm3", 1.0)
-        m.add_s_alpha_beta("c_H_in_H2O")
+        m.add_nuclide("H1", 2); m.add_nuclide("O16", 1); m.set_density("g/cm3", 1.0); m.add_s_alpha_beta("c_H_in_H2O")
+    elif name == "heavy_water":
+        m.add_nuclide("H2", 2); m.add_nuclide("O16", 1); m.set_density("g/cm3", 1.11); m.add_s_alpha_beta("c_D_in_D2O")
     elif name == "polyethylene":
-        m = openmc.Material()
-        m.add_nuclide("H1", 2); m.add_nuclide("C0", 1)
-        m.set_density("g/cm3", 0.94)
-        m.add_s_alpha_beta("c_H_in_CH2")
+        m.add_nuclide("H1", 2); m.add_nuclide("C0", 1); m.set_density("g/cm3", 0.94); m.add_s_alpha_beta("c_H_in_CH2")
+    elif name == "borated_polyethylene":
+        m.add_nuclide("H1", 2); m.add_nuclide("C0", 1); m.add_nuclide("B10", 0.5); m.set_density("g/cm3", 1.0); m.add_s_alpha_beta("c_H_in_CH2")
     elif name == "concrete":
-        m = openmc.Material()
-        for el, w in [("H",0.01),("O",0.529),("Si",0.337),("Ca",0.044),("Al",0.034),("Fe",0.014),("Na",0.016),("Mg",0.002)]:
-            m.add_element(el, w, "wo")
+        for el, w in [("H",0.01),("O",0.529),("Si",0.337),("Ca",0.044),("Al",0.034),("Fe",0.014),("Na",0.016),("Mg",0.002)]: m.add_element(el, w, "wo")
         m.set_density("g/cm3", 2.3)
-    elif name == "iron":
-        m = openmc.Material()
-        m.add_element("Fe", 1.0); m.set_density("g/cm3", 7.874)
-    elif name == "lead":
-        m = openmc.Material()
-        m.add_element("Pb", 1.0); m.set_density("g/cm3", 11.35)
-    elif name == "graphite":
-        m = openmc.Material()
-        m.add_nuclide("C0", 1.0); m.set_density("g/cm3", 1.7)
-        m.add_s_alpha_beta("c_Graphite")
-    elif name == "uranium":
-        m = openmc.Material()
-        m.add_nuclide("U235", 0.05); m.add_nuclide("U238", 0.95)
-        m.set_density("g/cm3", 19.0)
-    elif name == "b4c":
-        m = openmc.Material()
-        m.add_nuclide("B10", 4.0); m.add_nuclide("B11", 16.0)
-        m.add_nuclide("C0", 5.0); m.set_density("g/cm3", 2.52)
-    else:
-        m = openmc.Material()
-        m.add_element("Fe", 1.0); m.set_density("g/cm3", 7.874)
+    elif name == "concrete_magnetite":
+        for el, w in [("H",0.005),("O",0.250),("Fe",0.600),("Si",0.050),("Ca",0.050),("Al",0.045)]: m.add_element(el, w, "wo")
+        m.set_density("g/cm3", 4.0)
+    elif name == "iron": m.add_element("Fe", 1.0); m.set_density("g/cm3", 7.874)
+    elif name == "steel_304": m.add_element("Fe", 0.7); m.add_element("Cr", 0.19); m.add_element("Ni", 0.09); m.set_density("g/cm3", 8.0)
+    elif name == "lead": m.add_element("Pb", 1.0); m.set_density("g/cm3", 11.35)
+    elif name == "tungsten": m.add_element("W", 1.0); m.set_density("g/cm3", 19.3)
+    elif name == "graphite": m.add_nuclide("C0", 1.0); m.set_density("g/cm3", 1.7); m.add_s_alpha_beta("c_Graphite")
+    elif name == "beryllium": m.add_element("Be", 1.0); m.set_density("g/cm3", 1.85)
+    elif name == "uranium": m.add_nuclide("U235", 0.05); m.add_nuclide("U238", 0.95); m.set_density("g/cm3", 19.0)
+    elif name == "b4c": m.add_nuclide("B10", 4.0); m.add_nuclide("B11", 16.0); m.add_nuclide("C0", 5.0); m.set_density("g/cm3", 2.52)
+    elif name == "cadmium": m.add_element("Cd", 1.0); m.set_density("g/cm3", 8.65)
+    elif name == "gadolinium": m.add_element("Gd", 1.0); m.set_density("g/cm3", 7.9)
+    elif name == "hafnium": m.add_element("Hf", 1.0); m.set_density("g/cm3", 13.3)
+    elif name == "zircaloy": m.add_element("Zr", 0.982); m.add_element("Sn", 0.015); m.set_density("g/cm3", 6.56)
+    else: m.add_element("Fe", 1.0); m.set_density("g/cm3", 7.874) # fallback
     return m
 
 mat = build_mat(C["material"])
@@ -805,7 +879,17 @@ def attach_log_widget(widget):
     class _QH(logging.Handler):
         def __init__(self, w): super().__init__(); self.w = w
         def emit(self, r):
-            try: self.w.appendPlainText(self.format(r))
+            try:
+                # Форматируем сообщение
+                msg = self.format(r)
+                # Определяем цвет в зависимости от уровня лога
+                if r.levelno >= logging.ERROR: color = "#ef5350"    # Красный
+                elif r.levelno >= logging.WARNING: color = "#ffa726" # Оранжевый
+                else: color = "#66bb6a"                              # Зеленый
+                
+                # Вставляем HTML-тег с цветом
+                html_msg = f'<span style="color:{color};">{msg}</span>'
+                self.w.append(html_msg)
             except Exception: pass
     qh = _QH(widget); qh.setFormatter(_log_fmt); _logger.addHandler(qh)
 
@@ -842,8 +926,8 @@ def lateral_straggling_2d(part, T0, mat, n_particles=2000, n_steps=300):
             p = np.sqrt(T * (T + 2*mass))
             beta = p / (T + mass)
             if p > 0:
-                theta0 = (13.6 / (beta * p)) * z * np.sqrt(dx / X0) * (1 + 0.038 * np.log(dx / X0))
-                theta += np.random.normal(0, theta0) 
+                theta0 = (13.6 / (beta * p)) * z * np.sqrt(dx / X0) * (1 + 0.038 * np.log(dx / X0 + 1e-12))
+                theta += np.random.normal(0, abs(theta0)) 
             
             x += dx * np.cos(theta)
             y += dx * np.sin(theta)

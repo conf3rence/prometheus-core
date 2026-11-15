@@ -49,7 +49,7 @@
 
 ## 11. PyVista
 *   **Использование:** 3D-визуализация (облака нейтронов, 3D-сферы, треки).
-*   **Лицензия:** MIT License.
+*   **Лицензия:** MIT License.  
 *   **Ссылка:** https://pyvista.org/
 
 ## 12. VTK (Visualization Toolkit)
