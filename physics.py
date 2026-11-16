@@ -1,6 +1,6 @@
 """
-physics.py — физическое ядро Prometheus Core v3
-Многослойность, Поляризация, Backscatter + мост в wsl/openmc.
+physics.py — физическое ядро Prometheus Core v5
+Многослойность, Поляризация, Backscatter + мост в wsl/openmc + docker.
 """
 import multiprocessing as mp
 from functools import lru_cache
@@ -272,7 +272,13 @@ def _mc_core_numba(n_hist, seed, is_slab, R,
                     if r1 < (1.0 + 2.0*a) / (9.0 + 2.0*a): eps = 1.0 + \
                              2.0*a*np.random.random()
                     else: eps = (1.0 + 2.0*a) / (1.0 + 2.0*a*np.random.random())
+                    
                     mu_c = 1.0 - (eps - 1.0) / a
+                    
+                    # ФИКС: Защита от выхода косинуса за пределы [-1, 1]
+                    # Это предотвращает ошибку NaN при вычислении sqrt(1 - mu^2) ниже
+                    mu_c = max(-1.0, min(1.0, mu_c)) 
+                    
                     if np.random.random() < 1.0 - eps*(1.0 - mu_c*mu_c)/(1.0 + eps*eps): break
 
                 theta_idx = int((mu_c + 1.0) * 45.0)
@@ -303,6 +309,11 @@ def _mc_core_numba(n_hist, seed, is_slab, R,
                 ix = int((px + R) * gsc); iz = int((pz + R) * gsc)
                 r_pos = np.sqrt(px*px + py*py + pz*pz)
                 ri = min(int(r_pos / dr), rad_n - 1)
+
+            # ФИКС: Защита от выхода за границы массива (clamp)
+            ix = min(max(ix, 0), ngrid - 1)
+            iz = min(max(iz, 0), ngrid - 1)
+            ri = min(max(ri, 0), rad_n - 1)
 
             if 0 <= ix < ngrid and 0 <= iz < ngrid: g2[iz, ix] += dep
             rad_dep[ri] += dep
@@ -414,9 +425,8 @@ def gamma_mc(mat, R, spec_lines, n_hist, seed=42, ngrid=64, e_cut=0.001,
 
     r_c = (np.arange(rad_n) + 0.5) * dr
 
-    # Для slab: строим массив плотностей по глубине
+    # Для slab: строим массив масс по глубине (точный интеграл)
     if geom == "slab":
-        # Определяем границы слоёв
         layer_bounds = []
         cur = 0.0
         for l_mat, l_thick in layers:
@@ -425,13 +435,14 @@ def gamma_mc(mat, R, spec_lines, n_hist, seed=42, ngrid=64, e_cut=0.001,
 
         smass = np.zeros(rad_n)
         for i in range(rad_n):
-            depth = r_c[i]
+            z0 = i * dr
+            z1 = (i + 1) * dr
+            mass = 0.0
             for start, end, rho in layer_bounds:
-                if start <= depth < end:
-                    smass[i] = dr * rho / 1000.0
-                    break
-            else:
-                smass[i] = dr * layers[-1][0].density / 1000.0  # fallback
+                # Вычисляем длину пересечения бина [z0, z1] и слоя [start, end]
+                overlap = max(0.0, min(z1, end) - max(z0, start))
+                mass += overlap * rho
+            smass[i] = mass / 1000.0 # Перевод в кг
     else:
         smass = (4/3*np.pi*((np.arange(1, rad_n+1)*dr)**3 -
                  (np.arange(rad_n)*dr)**3)) * mat.density / 1000.0
@@ -517,103 +528,52 @@ def sp_elec(T, mat):
     if T <= 0: return 0.0, 0.0, 0.0
     tau = T/ME; g = 1+tau; b2 = 1-1/g**2
     if b2 <= 1e-9: return 0.0, 0.0, 0.0
-    I= mat["I"] * 1e-6; F = 1-b2 + (tau**2/8-(2*tau+1)*math.log(2))/(tau+1)**2
+    
+    I = mat["I"] * 1e-6
+    F = 1-b2 + (tau**2/8-(2*tau+1)*math.log(2))/(tau+1)**2
     coll = max(0.153536/b2*(mat["Z"]/mat["A"]) *(math.log(tau**2*(tau+2)/(2*(I/ME)**2)) + F), 0.0)
-    # Феноменологическое ограничение сверху, чтобы тормозные потери не превышали столкновительные
-    rad_factor = min(1.0, mat["Z"] * T / 800.0)
+    
+    # Убрали min(1.0, ...), чтобы не было ступеньки на 110 МэВ
+    rad_factor = mat["Z"] * T / 800.0 
     return (coll + coll * rad_factor) * mat["rho"], coll * mat["rho"], coll * rad_factor * mat["rho"]
 
 def csda(part, T0, mat, nstep=2000, straggling=True, seed=None):
-    """CSDA с расчетом среднего пробега. Дисперсия (страгглинг) считается отдельно."""
+    """CSDA с расчетом среднего пробега. Адаптивный шаг."""
     mass, z = PARTICLES[part]
-    dT = T0 / nstep
     x = 0.0; T = T0
     dep = [0.0]; de = []
     
-    while T > 0.01:
-        # s_val в МэВ/см (полная тормозная способность)
+    # Адаптивный шаг: не более 1% энергии, но не меньше 0.01 МэВ
+    while T > 0.05:
+        dT = max(min(0.01 * T, T0 / 200), 0.01)
+        
         s_val = (sp_elec(T, mat)[0] if part == "электрон" else sp_heavy(T, mass, z, mat)) * mat["rho"]
         if s_val <= 0: break
         
-        dx = dT / s_val
+        dx = min(dT / s_val, 5.0)  # Не более 5 см за шаг
+        
         dep.append(dep[-1] + dx)
         de.append(s_val)
         x += dx
-        T -= dT
+        
+        # ВАЖНО: вычитаем ровно то, что потратили, чтобы не было выбросов
+        T -= s_val * dx 
         
     de.append(de[-1] if de else 0.0)
-    return x, np.array(dep), np.array(de) # <--- ВОЗВРАЩАЕМ ПРОБЕГ (x)!
-
-def straggling_sigma(part, T0, mat, nstep=2000):
-    """Стандартное отклонение пробега по Бору (интеграл дисперсии вдоль трека)."""
-    mass, z = PARTICLES[part]
-    dT = T0 / nstep
-    T = T0
-    sigma_R_sq = 0.0
-    while T > 0.1:  # <-- Обрываем при T=0.1 МэВ, ниже формула Бора неприменима
-        s_val = (sp_elec(T, mat)[0] if part == "электрон" else sp_heavy(T, mass, z, mat)) * mat["rho"]
-        if s_val <= 0: break
-        dx = dT / s_val
-        p = np.sqrt(T * (T + 2 * mass))
-        beta = max(p / (T + mass), 0.01)  # <-- Кап на beta, чтобы не было деления на 0
-        dOmega2_dx = 0.307 * (mat["Z"] / mat["A"]) * mat["rho"] / beta**2 * (1 - beta**2 / 2.0)
-        sigma_R_sq += dOmega2_dx * dx / (s_val**2)
-        T -= dT
-    return np.sqrt(sigma_R_sq)
-
-def lateral_straggling_2d(part, T0, mat, n_particles=2000, n_steps=300):
-    """2D-карта латерального рассеяния (Highland formula с учетом 1/beta^2)."""
-    mass, z = PARTICLES[part]
-    dT = T0 / n_steps
-    X0 = 36.08 # Радиационная длина воды (см)
-    rng = np.random.default_rng()
-    
-    R_est, _, _ = csda(part, T0, mat, nstep=100, straggling=False)
-    x_bins = np.linspace(0, R_est * 1.05, 100)
-    y_bins = np.linspace(-3.0, 3.0, 100) # Возвращаем широкий диапазон для наглядности
-    grid, _, _ = np.histogram2d([], [], bins=[x_bins, y_bins])
-    
-    for _ in range(n_particles):
-        x, y = 0.0, 0.0
-        theta = 0.0
-        T = T0
-        
-        for i in range(n_steps):
-            s_val = (sp_heavy(T, mass, z, mat) if part != "электрон" else sp_elec(T, mat)[0]) * mat["rho"]
-            if s_val <= 0: break
-            
-            dx = dT / s_val 
-            
-            p = np.sqrt(T * (T + 2 * mass))
-            beta = p / (T + mass)
-            
-            if p > 0 and beta > 1e-6:
-                # Формула Хайленда с точным 1/beta^2
-                theta0 = (13.6 / (beta * p)) * z * np.sqrt(dx / X0) * (1 + 0.038 * np.log(dx / X0 + 1e-12))
-                theta += rng.normal(0, abs(theta0))
-            
-            x += dx * np.cos(theta)
-            y += dx * np.sin(theta)
-            T -= dT
-            
-            if 0 <= x < x_bins[-1] and y_bins[0] <= y <= y_bins[-1]:
-                ix = np.searchsorted(x_bins, x) - 1
-                iy = np.searchsorted(y_bins, y) - 1
-                if 0 <= ix < 99 and 0 <= iy < 99:
-                    grid[ix, iy] += 1
-
-    return grid.T, x_bins, y_bins
+    return x, np.array(dep), np.array(de)
 
 def lateral_straggling_2d(part, T0, mat, n_particles=2000, n_steps=400):
     """2D-карта латерального рассеяния с корректным учетом 1/beta^2."""
     mass, z = PARTICLES[part]
     dT = T0 / n_steps
-    X0 = 36.08 # Радиационная длина воды (см)
+    X0 = 36.08 # Радиационная длина для воды (см)
     rng = np.random.default_rng()
     
     R_est, _, _ = csda(part, T0, mat, nstep=100, straggling=False)
-    x_bins = np.linspace(0, R_est * 1.05, 100)
-    y_bins = np.linspace(-1.5, 1.5, 100) # Сузили диапазон Y для наглядности
+    
+    # Сетка 80x80 для плотного заполнения (без пунктира)
+    x_bins = np.linspace(0, R_est * 1.05, 80)
+    y_bins = np.linspace(-1.5, 1.5, 80)
     grid, _, _ = np.histogram2d([], [], bins=[x_bins, y_bins])
     
     for _ in range(n_particles):
@@ -642,10 +602,27 @@ def lateral_straggling_2d(part, T0, mat, n_particles=2000, n_steps=400):
             if 0 <= x < x_bins[-1] and y_bins[0] <= y <= y_bins[-1]:
                 ix = np.searchsorted(x_bins, x) - 1
                 iy = np.searchsorted(y_bins, y) - 1
-                if 0 <= ix < 99 and 0 <= iy < 99:
+                if 0 <= ix < 79 and 0 <= iy < 79:
                     grid[ix, iy] += 1
 
     return grid.T, x_bins, y_bins
+
+def straggling_sigma(part, T0, mat, nstep=2000):
+    """Стандартное отклонение пробега по Бору (интеграл дисперсии вдоль трека)."""
+    mass, z = PARTICLES[part]
+    dT = T0 / nstep
+    T = T0
+    sigma_R_sq = 0.0
+    while T > 0.1:  # <-- Обрываем при T=0.1 МэВ, ниже формула Бора неприменима
+        s_val = (sp_elec(T, mat)[0] if part == "электрон" else sp_heavy(T, mass, z, mat)) * mat["rho"]
+        if s_val <= 0: break
+        dx = dT / s_val
+        p = np.sqrt(T * (T + 2 * mass))
+        beta = max(p / (T + mass), 0.01)  # <-- Кап на beta, чтобы не было деления на 0
+        dOmega2_dx = 0.307 * (mat["Z"] / mat["A"]) * mat["rho"] / beta**2 * (1 - beta**2 / 2.0)
+        sigma_R_sq += dOmega2_dx * dx / (s_val**2)
+        T -= dT
+    return np.sqrt(sigma_R_sq)
 
 def range_vs_energy(part, mat, nE=60, seed=None):
     Emin, Emax = (0.5, 500.0) if part in ("протон", "альфа", "дейтрон") else (0.05, 50.0)
@@ -801,7 +778,7 @@ plt.step(ec, flux, where="mid", color="teal", lw=1.5)
 plt.xscale("log"); plt.yscale("log")
 plt.xlabel("Энергия нейтронов, эВ"); plt.ylabel("Поток (усл. ед.)")
 plt.title("Спектр нейтронов: " + C["material"] +f", источник {C['energy_MeV']} МэВ")
-plt.axvline(0.025,color="red",ls="--", alpha=.6, label="тепловые 0.025 эВ")
+plt.axvline(0.0253, color="red", ls="--", alpha=.6, label="kT = 0.0253 эВ (T=293 K)")
 plt.axvline(C["energy_MeV"]*1e6, color="orange", ls="--", alpha=.6, label="источник")
 plt.legend(); plt.grid(alpha=.3, which="both"); plt.tight_layout()
 plt.savefig(C["out_spec"], dpi=120); plt.close()
@@ -850,8 +827,22 @@ def run_neutrons_wsl(cfg, log_cb):
         except FileNotFoundError: 
             raise RuntimeError("Команда 'wsl' не найдена.\nУбедись, что WSL установлен (wsl --install).")
             
-        if proc.stdout: log_cb(proc.stdout[-3000:])
-        if proc.returncode != 0 and proc.stderr: log_cb("[WSL stderr] " + proc.stderr[-1000:])
+        if proc.stdout:
+            # Фильтруем C++ спам от OpenMC
+            lines = proc.stdout.splitlines()
+            clean_lines = []
+            for line in lines:
+                if any(spam in line for spam in ["Copyright", "Date/Time", "MPI Processes", "####", "====", "TIMING STATISTICS", "Calculation Rate", "Reading", "Preparing", "Writing"]):
+                    continue
+                if line.strip() == "":
+                    continue
+                clean_lines.append(line)
+            
+            if clean_lines:
+                log_cb("[WSL STDOUT]\n" + "\n".join(clean_lines[-50:])) # Показываем последние 50 полезных строк
+
+        if proc.returncode != 0 and proc.stderr: 
+            log_cb("[WSL stderr] " + proc.stderr[-1000:])
         if "NEUTRON_DONE" not in (proc.stdout or ""): 
             raise RuntimeError("OpenMC не завершился успешно.\n" + (proc.stderr or "")[-2000:])
             
@@ -875,21 +866,89 @@ def setup_log_file(out_dir):
     fh = logging.FileHandler(path, encoding="utf-8"); fh.setFormatter(_log_fmt); _logger.addHandler(fh)
     return path
 
+def run_neutrons_docker(cfg, log_cb):
+    import tempfile, subprocess, os, json, shutil
+    tmp = tempfile.mkdtemp(prefix="prom_")
+    try:
+        # Сохраняем скрипт во временную папку
+        script_path = os.path.join(tmp, "neu.py")
+        with open(script_path, "w", encoding="utf-8") as f: 
+            f.write(NEUTRON_SCRIPT)
+        
+        cfg = dict(cfg)
+        cfg["out_spec"] = "/data/spec.png"
+        cfg["out_map"]  = "/data/map.png"
+        cfg["out_json"] = "/data/res.json"
+        
+        cfg_json = json.dumps(cfg)
+        
+        # Преобразуем путь Windows в путь для Docker
+        win_path = tmp.replace("\\", "/")
+        if len(win_path) > 1 and win_path[1] == ":": 
+            win_path = "/" + win_path[0].lower() + win_path[2:]
+            
+        # Команда запуска Docker
+        cmd = [
+            "docker", "run", "--rm",
+            "-v", f"{win_path}:/data",
+            "-e", f"PROM_CFG={cfg_json}",
+            "prometheus-openmc",
+            "python", "/data/neu.py"
+        ]
+        
+        log_cb(f"[DOCKER] запуск OpenMC: материал={cfg['material']}, R={cfg['radius']} см, E={cfg['energy_MeV']} МэВ")
+        log_cb("[DOCKER] подождите, контейнер запускается...")
+        
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+        
+        # Фильтрация логов (убираем C++ спам)
+        if proc.stdout: 
+            lines = proc.stdout.splitlines()
+            clean = [l for l in lines if not any(s in l for s in ["Copyright", "Date/Time", "TIMING", "Reading", "Preparing", "Writing", "####", "===="])]
+            if clean: log_cb("[DOCKER STDOUT]\n" + "\n".join(clean[-20:]))
+            
+        if proc.returncode != 0 and proc.stderr: 
+            log_cb("[DOCKER stderr] " + proc.stderr[-1000:])
+            
+        if "NEUTRON_DONE" not in (proc.stdout or ""): 
+            raise RuntimeError("OpenMC (Docker) не завершился успешно.\n" + (proc.stderr or "")[-2000:])
+            
+        res_path = os.path.join(tmp, "res.json")
+        with open(res_path, encoding="utf-8") as f: 
+            stats = json.load(f)
+        
+        return {
+            "spec_img": os.path.join(tmp, "spec.png"),
+            "map_img":  os.path.join(tmp, "map.png"),
+            "stats":    stats
+        }
+    except Exception:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+
 def attach_log_widget(widget):
     class _QH(logging.Handler):
         def __init__(self, w): super().__init__(); self.w = w
         def emit(self, r):
             try:
-                # Форматируем сообщение
+                # Локальный импорт, чтобы не было ошибки Undefined name 'QtGui'
+                from PySide6 import QtGui 
                 msg = self.format(r)
-                # Определяем цвет в зависимости от уровня лога
-                if r.levelno >= logging.ERROR: color = "#ef5350"    # Красный
-                elif r.levelno >= logging.WARNING: color = "#ffa726" # Оранжевый
-                else: color = "#66bb6a"                              # Зеленый
+                if r.levelno >= logging.ERROR: color = "#ef5350"
+                elif r.levelno >= logging.WARNING: color = "#ffa726"
+                else: color = "#66bb6a"
                 
-                # Вставляем HTML-тег с цветом
-                html_msg = f'<span style="color:{color};">{msg}</span>'
-                self.w.append(html_msg)
+                import html
+                safe_msg = html.escape(msg).replace("\n", "<br>")
+                html_msg = f'<span style="color:{color}; white-space: pre-wrap; font-family: Consolas, monospace;">{safe_msg}</span>'
+                
+                # Принудительно вставляем как HTML в конец
+                cur = self.w.textCursor()
+                cur.movePosition(QtGui.QTextCursor.MoveOperation.End)
+                self.w.setTextCursor(cur)
+                self.w.insertHtml(html_msg)
+                self.w.insertHtml("<br>")
+                self.w.ensureCursorVisible()
             except Exception: pass
     qh = _QH(widget); qh.setFormatter(_log_fmt); _logger.addHandler(qh)
 
@@ -901,45 +960,6 @@ def fmt_hl(s):
     if s >= _H: return f"{s/_H:.3g} ч"
     if s >= 60: return f"{s/60:.3g} мин"
     return f"{s:.3g} с"
-def lateral_straggling_2d(part, T0, mat, n_particles=2000, n_steps=300):
-    """Симуляция 2D-карты латерального (бокового) рассеяния пучка частиц."""
-    mass, z = PARTICLES[part]
-    dT = T0 / n_steps
-    X0 = 36.08 # Радиационная длина для воды (см)
-    
-    R_est, _, _ = csda(part, T0, mat, nstep=100) 
-    x_bins = np.linspace(0, R_est * 1.1, 100)
-    y_bins = np.linspace(-3, 3, 100)
-    grid, _, _ = np.histogram2d([], [], bins=[x_bins, y_bins])
-    
-    for _ in range(n_particles):
-        x, y = 0.0, 0.0
-        theta = 0.0
-        T = T0
-        
-        for i in range(n_steps):
-            s_val = sp_heavy(T, mass, z, mat) if part != "электрон" else sp_elec(T, mat)[0]
-            if s_val <= 0: break
-            
-            dx = dT / s_val 
-            
-            p = np.sqrt(T * (T + 2*mass))
-            beta = p / (T + mass)
-            if p > 0:
-                theta0 = (13.6 / (beta * p)) * z * np.sqrt(dx / X0) * (1 + 0.038 * np.log(dx / X0 + 1e-12))
-                theta += np.random.normal(0, abs(theta0)) 
-            
-            x += dx * np.cos(theta)
-            y += dx * np.sin(theta)
-            T -= dT
-            
-            if 0 <= x < x_bins[-1] and -3 <= y <= 3:
-                ix = np.searchsorted(x_bins, x) - 1
-                iy = np.searchsorted(y_bins, y) - 1
-                if 0 <= ix < 99 and 0 <= iy < 99:
-                    grid[ix, iy] += 1
-
-    return grid.T, x_bins, y_bins
 
 if __name__ == "__main__":
     print("=== Самопроверка physics.py ===")

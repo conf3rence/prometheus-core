@@ -1,4 +1,4 @@
-"""app.py — GUI Prometheus Core v3.1.0 (Dev)"""
+"""app.py — GUI Prometheus Core v5.0.0 (Dev)"""
 import os, sys, json, base64, time
 import multiprocessing as mp
 from io import BytesIO
@@ -13,6 +13,18 @@ from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavToolbar
 from matplotlib.colors import LogNorm
 import physics as P
 import validator
+import reportlab
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+import io
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+import time
+import os
+import requests
 # ==========================================
 # ГЛОБАЛЬНЫЕ НАСТРОЙКИ СБОРКИ
 # True = Lite (без нейтронов), False = Full (со всеми модулями)
@@ -76,7 +88,140 @@ if os.path.exists(CUSTOM_ISO_FILE):
         with open(CUSTOM_ISO_FILE, "r", encoding="utf-8") as f:
             P.ISOTOPES.update(json.load(f))
     except Exception: pass
+    
+def send_discord_notification(webhook_url, title, message, fields=None):
+    if not webhook_url or not webhook_url.startswith("https://discord.com"):
+        return
+    try:
+        embed = {
+            "title": f"⚛️ {title}",
+            "description": message,
+            "color": 3066993, # Зеленый
+            "footer": {
+                "text": "Prometheus Core v5.0.0 | Система мониторинга",
+                "icon_url": "https://cdn-icons-png.flaticon.com/512/2933/2933245.png"
+            },
+            "timestamp": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+        }
+        
+        # Если переданы дополнительные поля (таблица)
+        if fields:
+            embed["fields"] = fields
+            
+        data = {
+            "username": "Prometheus Core",
+            "avatar_url": "https://cdn-icons-png.flaticon.com/512/2933/2933245.png",
+            "embeds": [embed]
+        }
+        requests.post(webhook_url, json=data, timeout=5)
+    except Exception as e:
+        print(f"Ошибка отправки в Discord: {e}")
 
+def generate_pdf_report(parent, title, params_dict, img_buf, filename="report.pdf"):
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    import time
+    import os
+    import reportlab
+
+    # --- УМНЫЙ ПОИСК ШРИФТА С КИРИЛЛИЦЕЙ ---
+    font_name = 'Helvetica'
+    font_bold = 'Helvetica-Bold'
+    
+    # 1. Пытаемся найти DejaVuSans (идет в комплекте с reportlab)
+    try:
+        font_path = os.path.join(os.path.dirname(reportlab.__file__), 'fonts', 'DejaVuSans.ttf')
+        if os.path.exists(font_path):
+            pdfmetrics.registerFont(TTFont('CyrFont', font_path))
+            font_name = 'CyrFont'
+            font_bold = 'CyrFont'
+    except Exception:
+        pass
+
+    # 2. Если не нашли, ищем Arial в Windows
+    if font_name == 'Helvetica':
+        font_path = "C:\\Windows\\Fonts\\arial.ttf"
+        font_bold_path = "C:\\Windows\\Fonts\\arialbd.ttf"
+        if os.path.exists(font_path):
+            pdfmetrics.registerFont(TTFont('Arial', font_path))
+            if os.path.exists(font_bold_path):
+                pdfmetrics.registerFont(TTFont('Arial-Bold', font_bold_path))
+                font_name = 'Arial'
+                font_bold = 'Arial-Bold'
+            else:
+                font_name = 'Arial'
+                font_bold = 'Arial'
+    # ----------------------------------------
+
+    path, _ = QtWidgets.QFileDialog.getSaveFileName(parent, "Сохранить PDF", filename, "PDF (*.pdf)")
+    if not path: return None
+    
+    try:
+        c = canvas.Canvas(path, pagesize=A4)
+        width, height = A4
+        
+        # Заголовок
+        c.setFont(font_bold, 22)
+        c.drawString(50, height - 60, f"Prometheus Core: {title}")
+        
+        c.setFont(font_name, 12)
+        c.drawString(50, height - 90, f"Дата генерации: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        # Параметры
+        c.setFont(font_bold, 14)
+        c.drawString(50, height - 130, "Параметры расчета:")
+        c.setFont(font_name, 11)
+        
+        y = height - 150
+        for key, val in params_dict.items():
+            c.drawString(60, y, f"{key}: {val}")
+            y -= 20
+            
+        # График
+        if img_buf:
+            img = ImageReader(img_buf)
+            c.drawImage(img, 50, y - 400, width=500, height=380, preserveAspectRatio=True, mask='auto')
+            
+        # Футер (Верификация)
+        c.setFont(font_name, 10)
+        c.setFillColorRGB(0.5, 0.5, 0.5)
+        c.drawString(50, 50, "Проект верифицирован по NIST XCOM (<0.01%), NIST PSTAR (0.08%), SRIM (0.03%).")
+        c.drawString(50, 35, "Отчет сгенерирован автоматически приложением Prometheus Core v5.0.0")
+        
+        c.save()
+        return path
+    except Exception as e:
+        QtWidgets.QMessageBox.critical(parent, "Ошибка PDF", f"Не удалось создать PDF: {e}")
+        return None
+
+def log_calculation(module, params, result, status="success"):
+    """Сохраняет информацию о расчёте в историю (output/history.json)"""
+    path = os.path.join(P.OUT_DIR, "history.json")
+    history = []
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                history = json.load(f)
+        except Exception: pass
+    
+    history.append({
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "module": module,
+        "params": params,
+        "result": result,
+        "status": status
+    })
+    
+    # Ограничиваем историю 500 записями
+    if len(history) > 500:
+        history = history[-500:]
+        
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(history, f, indent=2, ensure_ascii=False)
+    
 def log(msg): P.plog(msg)
 
 def make_json_serializable(obj):
@@ -136,7 +281,7 @@ def launch_3d_view(log_cb, mode="gamma", R=10.0, data=None):
         dist = np.sqrt(x**2 + y**2 + z**2)
         flux = np.exp(-(dist**2) / (2 * (R/3)**2)) * 1e6 
         grid.point_data["flux"] = flux
-        plotter.add_volume(grid, cmap="plasma", opacity="sigmoid", show_scalar_bar=True, scalar_bar_args={'title': 'Поток нейтронов'})
+        plotter.add_volume(grid, cmap="plasma", opacity="sigmoid", show_scalar_bar=True, scalar_bar_args={'title': 'Поток нейтронов', 'color': 'white', 'title_font_size': 15})
         plotter.add_mesh(pv.Sphere(radius=R*0.05), color='red')
         plotter.show(title=f"3D Облако тепловых нейтронов (R={R} см)")
 
@@ -175,6 +320,190 @@ class GeneratorTab(QtWidgets.QWidget):
 # ==========================================
 # ВКЛАДКА: ПЕСОЧНИЦА
 # ==========================================
+
+class StatsTab(QtWidgets.QWidget):
+    def __init__(s, console):
+        super().__init__(); s.console = console
+        layout = QtWidgets.QVBoxLayout(s)
+        
+        # --- Панель управления ---
+        btn_layout = QtWidgets.QHBoxLayout()
+        s.btn_refresh = QtWidgets.QPushButton("🔄 Обновить")
+        s.btn_refresh.clicked.connect(s.refresh_stats)
+        s.btn_export_csv = QtWidgets.QPushButton("📄 Экспорт в CSV")
+        s.btn_export_csv.clicked.connect(s.export_csv)
+        s.btn_export_json = QtWidgets.QPushButton("💾 Экспорт в JSON")
+        s.btn_export_json.clicked.connect(s.export_json)
+        s.btn_clear = QtWidgets.QPushButton("🗑 Очистить историю")
+        s.btn_clear.setStyleSheet("color: #ef5350;")
+        s.btn_clear.clicked.connect(s.clear_history)
+        
+        btn_layout.addWidget(s.btn_refresh)
+        btn_layout.addWidget(s.btn_export_csv)
+        btn_layout.addWidget(s.btn_export_json)
+        btn_layout.addStretch()
+        btn_layout.addWidget(s.btn_clear)
+        layout.addLayout(btn_layout)
+        
+        # --- Сводные метрики ---
+        metrics_layout = QtWidgets.QHBoxLayout()
+        s.lbl_total = QtWidgets.QLabel("Всего расчётов: 0")
+        s.lbl_gamma = QtWidgets.QLabel("Гамма: 0")
+        s.lbl_charged = QtWidgets.QLabel("Заряженные: 0")
+        s.lbl_neutron = QtWidgets.QLabel("Нейтроны: 0")
+        s.lbl_avg_time = QtWidgets.QLabel("Среднее время: 0 сек")
+        
+        for lbl in [s.lbl_total, s.lbl_gamma, s.lbl_charged, s.lbl_neutron, s.lbl_avg_time]:
+            lbl.setStyleSheet("font-weight: bold; font-size: 13px; padding: 8px; background: #2b2b2b; border-radius: 4px;")
+            metrics_layout.addWidget(lbl)
+        layout.addLayout(metrics_layout)
+        
+        # --- График + Таблица ---
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        
+        # График распределения
+        s.fig = Figure(figsize=(5, 4), tight_layout=True)
+        s.fig.patch.set_facecolor('#2b2b2b')
+        s.canvas = FigureCanvas(s.fig)
+        splitter.addWidget(s.canvas)
+        
+        # Таблица последних расчётов
+        s.table = QtWidgets.QTableWidget()
+        s.table.setColumnCount(6)
+        s.table.setHorizontalHeaderLabels(["Время", "Модуль", "Параметры", "Результат", "Время (сек)", "Статус"])
+        s.table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.Stretch)
+        s.table.setStyleSheet("background-color: #1e1e1e; color: #d4d4d4;")
+        splitter.addWidget(s.table)
+        splitter.setSizes([400, 700])
+        
+        layout.addWidget(splitter)
+        
+        # Загружаем данные при старте
+        s.refresh_stats()
+        
+    def load_history(s):
+        path = os.path.join(P.OUT_DIR, "history.json")
+        if not os.path.exists(path): return []
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception: return []
+    
+    def refresh_stats(s):
+        history = s.load_history()
+        
+        # Сводные метрики
+        total = len(history)
+        gamma = sum(1 for h in history if h.get("module") == "Гамма")
+        charged = sum(1 for h in history if h.get("module") == "Заряженные")
+        neutron = sum(1 for h in history if h.get("module") == "Нейтроны")
+        
+        times = [h.get("result", {}).get("time", 0) for h in history if h.get("result", {}).get("time")]
+        avg_time = sum(times) / len(times) if times else 0
+        
+        s.lbl_total.setText(f"Всего расчётов: {total}")
+        s.lbl_gamma.setText(f"Гамма: {gamma}")
+        s.lbl_charged.setText(f"Заряженные: {charged}")
+        s.lbl_neutron.setText(f"Нейтроны: {neutron}")
+        s.lbl_avg_time.setText(f"Среднее время: {avg_time:.2f} сек")
+        
+        # Таблица (последние 50, в обратном порядке)
+        recent = history[-50:][::-1]
+        s.table.setRowCount(len(recent))
+        for i, h in enumerate(recent):
+            s.table.setItem(i, 0, QtWidgets.QTableWidgetItem(h.get("timestamp", "")))
+            s.table.setItem(i, 1, QtWidgets.QTableWidgetItem(h.get("module", "")))
+            
+            # Компактно параметры
+            params_str = ", ".join(f"{k}={v}" for k, v in h.get("params", {}).items())[:60]
+            s.table.setItem(i, 2, QtWidgets.QTableWidgetItem(params_str))
+            
+            # Результат
+            result = h.get("result", {})
+            res_str = result.get("summary", str(result))[:40]
+            s.table.setItem(i, 3, QtWidgets.QTableWidgetItem(res_str))
+            
+            s.table.setItem(i, 4, QtWidgets.QTableWidgetItem(f"{result.get('time', 0):.2f}"))
+            
+            status_item = QtWidgets.QTableWidgetItem(h.get("status", "success"))
+            if h.get("status") == "error":
+                status_item.setForeground(QtGui.QColor("#ef5350"))
+            else:
+                status_item.setForeground(QtGui.QColor("#66bb6a"))
+            s.table.setItem(i, 5, status_item)
+        
+        # График
+        s.fig.clear()
+        ax = s.fig.add_subplot(111)
+        ax.set_facecolor('#1e1e1e')
+        
+        if total > 0:
+            labels = ["Гамма", "Заряженные", "Нейтроны"]
+            values = [gamma, charged, neutron]
+            colors = ["#4CAF50", "#2196F3", "#9C27B0"]
+            # Убираем нулевые значения для чистоты
+            filtered = [(l, v, c) for l, v, c in zip(labels, values, colors) if v > 0]
+            if filtered:
+                ax.pie([f[1] for f in filtered], labels=[f[0] for f in filtered], 
+                       colors=[f[2] for f in filtered], autopct='%1.0f%%',
+                       textprops={'color': 'white', 'fontsize': 10})
+        else:
+            ax.text(0.5, 0.5, "Нет данных", ha='center', va='center', 
+                   color='white', fontsize=14, transform=ax.transAxes)
+            ax.axis('off')
+        
+        s.fig.patch.set_facecolor('#1e1e1e')
+        s.canvas.draw()
+    
+    def export_csv(s):
+        history = s.load_history()
+        if not history: return s.console("[СТАТИСТИКА] История пуста.")
+        
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(s, "Экспорт CSV", "history.csv", "CSV (*.csv)")
+        if not path: return
+        
+        import csv
+        try:
+            with open(path, "w", newline="", encoding="utf-8-sig") as f:
+                writer = csv.writer(f, delimiter=";")
+                writer.writerow(["Время", "Модуль", "Параметры", "Результат", "Время (сек)", "Статус"])
+                for h in history:
+                    params = "; ".join(f"{k}={v}" for k, v in h.get("params", {}).items())
+                    result = h.get("result", {})
+                    writer.writerow([
+                        h.get("timestamp", ""),
+                        h.get("module", ""),
+                        params,
+                        result.get("summary", ""),
+                        result.get("time", 0),
+                        h.get("status", "")
+                    ])
+            s.console(f"[СТАТИСТИКА] Экспорт в CSV: {path}")
+        except Exception as e:
+            s.console(f"[СТАТИСТИКА] Ошибка экспорта: {e}")
+    
+    def export_json(s):
+        history = s.load_history()
+        if not history: return s.console("[СТАТИСТИКА] История пуста.")
+        
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(s, "Экспорт JSON", "history.json", "JSON (*.json)")
+        if not path: return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(history, f, indent=2, ensure_ascii=False)
+            s.console(f"[СТАТИСТИКА] Экспорт в JSON: {path}")
+        except Exception as e:
+            s.console(f"[СТАТИСТИКА] Ошибка экспорта: {e}")
+    
+    def clear_history(s):
+        reply = QtWidgets.QMessageBox.question(s, "Очистка", 
+            "Вы уверены, что хотите удалить всю историю расчётов?",
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No)
+        if reply == QtWidgets.QMessageBox.StandardButton.Yes:
+            path = os.path.join(P.OUT_DIR, "history.json")
+            if os.path.exists(path): os.remove(path)
+            s.refresh_stats()
+            s.console("[СТАТИСТИКА] История очищена.")
 class SandboxTab(QtWidgets.QWidget):
     def __init__(s, console):
         super().__init__(); s.console = console
@@ -195,6 +524,88 @@ class SandboxTab(QtWidgets.QWidget):
                     for name in json.load(f).keys(): s.list_iso.addItem(f"✅ {name}")
             except Exception: pass
         if s.list_iso.count() == 0: s.list_iso.addItem("(Нет изотопов)")
+class IdeTab(QtWidgets.QWidget):
+    def __init__(s, console):
+        super().__init__(); s.console = console
+        layout = QtWidgets.QVBoxLayout(s)
+        
+        # Панель кнопок
+        btn_layout = QtWidgets.QHBoxLayout()
+        s.btn_open = QtWidgets.QPushButton("📂 Открыть файл")
+        s.btn_open.clicked.connect(s.open_file)
+        s.btn_run = QtWidgets.QPushButton("▶ Запустить скрипт")
+        s.btn_run.setStyleSheet("background:#2e7d32;color:white;font-weight:bold;")
+        s.btn_run.clicked.connect(s.run_script)
+        s.btn_clear = QtWidgets.QPushButton("🗑 Очистить")
+        s.btn_clear.clicked.connect(lambda: s.editor.clear())
+        
+        btn_layout.addWidget(s.btn_open); btn_layout.addWidget(s.btn_run); btn_layout.addWidget(s.btn_clear)
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+        
+        # Редактор кода
+        s.editor = QtWidgets.QPlainTextEdit()
+        s.editor.setStyleSheet("""
+            background-color: #1e1e1e; 
+            color: #d4d4d4; 
+            font-family: Consolas, monospace; 
+            font-size: 14px; 
+            border: 1px solid #333;
+        """)
+        s.editor.setPlaceholderText("Введите код на Python здесь...")
+        layout.addWidget(s.editor)
+        
+        # Консоль вывода
+        s.out_console = QtWidgets.QPlainTextEdit()
+        s.out_console.setReadOnly(True)
+        s.out_console.setMaximumHeight(150)
+        s.out_console.setStyleSheet("background-color: #000000; color: #66bb6a; font-family: Consolas;")
+        layout.addWidget(QtWidgets.QLabel("ВЫВОД СКРИПТА:"))
+        layout.addWidget(s.out_console)
+
+    def open_file(s):
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(s, "Открыть Python-скрипт", "", "Python (*.py);;Все файлы (*.*)")
+        if path:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    s.editor.setPlainText(f.read())
+                s.console(f"[IDE] Открыт файл: {path}")
+            except Exception as e:
+                s.console(f"[IDE] Ошибка чтения: {e}")
+
+    def run_script(s):
+        code = s.editor.toPlainText()
+        if not code.strip():
+            return s.out_console.setPlainText("Нет кода для запуска.")
+            
+        s.out_console.clear()
+        s.out_console.appendPlainText("Запуск...\n")
+        
+        import tempfile, subprocess, sys, os
+        tmp_path = ""
+        try:
+            # Создаем временный файл
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".py", mode="w", encoding="utf-8") as tmp:
+                tmp.write(code)
+                tmp_path = tmp.name
+                
+            # Запускаем через sys.executable (тот же Python, что и программа)
+            result = subprocess.run([sys.executable, tmp_path], capture_output=True, text=True, timeout=10)
+            
+            if result.stdout:
+                s.out_console.appendPlainText(result.stdout)
+            if result.stderr:
+                s.out_console.appendPlainText(f"ОШИБКА:\n{result.stderr}")
+                
+            s.console("[IDE] Скрипт выполнен.")
+            
+        except subprocess.TimeoutExpired:
+            s.out_console.appendPlainText("ОШИБКА: Превышено время выполнения (10 сек).")
+        except Exception as e:
+            s.out_console.appendPlainText(f"ОШИБКА ЗАПУСКА: {e}")
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                os.remove(tmp_path)
 
 # ==========================================
 # ВКЛАДКА: CLI
@@ -268,9 +679,14 @@ class SliceDialog(QtWidgets.QDialog):
         layout.addWidget(self.canvas)
         self.slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal); self.slider.setRange(0, self.ny - 1); self.slider.setValue(self.y_center)
         self.slider.valueChanged.connect(self.update_slice); layout.addWidget(self.slider); self.update_slice(self.y_center)
+        
     def update_slice(self, val):
         y_pos = self.ax_map.get_ylim()[0] + (val / self.ny) * (self.ax_map.get_ylim()[1] - self.ax_map.get_ylim()[0])
-        self.red_line.set_ydata([y_pos, y_pos]); self.ax_slice.clear(); slice_data = self.g2_disp[val, :]
+        self.red_line.set_ydata([y_pos, y_pos]); self.ax_slice.clear()
+        
+        # ФИКС: Обрезаем последний бин, который создает визуальный обрыв на краю
+        slice_data = self.g2_disp[val, :-1]
+        
         x_axis = np.linspace(self.ax_map.get_xlim()[0], self.ax_map.get_xlim()[1], len(slice_data))
         self.ax_slice.plot(x_axis, slice_data, color="cyan", lw=2); self.ax_slice.set_yscale("log"); self.canvas.draw_idle()
 
@@ -356,7 +772,37 @@ class SelectorDialog(QtWidgets.QDialog):
         if s.list_widget.count() > 0: s.list_widget.setCurrentRow(0)
         
     def filter_list(s, text):
-        for i in range(s.list_widget.count()): s.list_widget.item(i).setHidden(text.lower() not in s.list_widget.item(i).text().lower())
+        # --- ПАСХАЛКА SCP-8926 ---
+        if text.strip() == "8926":
+            s.search.clear() # Очищаем поиск
+            s.show_scp_warning() # Вызываем окно
+            return
+        # --------------------------
+        
+        for i in range(s.list_widget.count()): 
+            s.list_widget.item(i).setHidden(text.lower() not in s.list_widget.item(i).text().lower())
+    def show_scp_warning(s):
+        msg = QtWidgets.QMessageBox(s)
+        msg.setIcon(QtWidgets.QMessageBox.Icon.Critical)
+        msg.setWindowTitle("SCP FOUNDATION SECURE TERMINAL")
+        
+        # Настраиваем текст в стиле SCP
+        msg.setText("<b>ВНИМАНИЕ: ОБНАРУЖЕНА ПОПЫТКА ДОСТУПА К SCP-8926</b>")
+        msg.setInformativeText(
+            "Меметический Агент Умерщвления (МАУ) класса IX активирован.\n\n"
+            "Ваш пульс синхронизирован с частотой 0.5 Гц.\n"
+            "Если вы читаете это сообщение — вы уже мертвы.\n\n"
+            "Пожалуйста, не падайте на клавиатуру. Это может вызвать короткое замыкание."
+        )
+        
+        # Делаем окно темным и красным
+        msg.setStyleSheet("""
+            QMessageBox { background-color: #1e1e1e; }
+            QLabel { color: #ef5350; font-family: Consolas; font-size: 13px; }
+            QPushButton { background-color: #2b2b2b; color: #ffffff; border: 1px solid #ef5350; padding: 6px 12px; border-radius: 4px;}
+            QPushButton:hover { background-color: #ef5350; }
+        """)
+        msg.exec()
         
     def update_details(s, name):
         if not name or name not in s.data_dict: return
@@ -375,14 +821,23 @@ class SelectorDialog(QtWidgets.QDialog):
 # РАБОЧИЕ ПОТОКИ
 # ==========================================
 class GammaWorker(QtCore.QThread):
-    done=QtCore.Signal(dict); fail=QtCore.Signal(str); prog=QtCore.Signal(float)
+    done=QtCore.Signal(dict); fail=QtCore.Signal(str); prog=QtCore.Signal(float); status_msg=QtCore.Signal(str)
     def __init__(s,p): super().__init__(); s.p=p; s._stop=False
     def stop(s): s._stop=True
     def run(s):
         try:
-            t_start = time.perf_counter(); r=P.gamma_mc(**s.p, progress=lambda f:s.prog.emit(f), should_stop=lambda:s._stop); t_end = time.perf_counter()
-            if r is not None: r["elapsed_time"] = t_end - t_start; s.done.emit(r)
-        except Exception as e: s.fail.emit(f"{type(e).__name__}: {e}")
+            def progress_cb(f):
+                s.prog.emit(f)
+                s.status_msg.emit(f"Расчет... {int(f*100)}%")
+                
+            t_start = time.perf_counter()
+            r = P.gamma_mc(**s.p, progress=progress_cb, should_stop=lambda:s._stop)
+            t_end = time.perf_counter()
+            if r is not None: 
+                r["elapsed_time"] = t_end - t_start
+                s.done.emit(r)
+        except Exception as e: 
+            s.fail.emit(f"{type(e).__name__}: {e}")
 class AttenuationWorker(QtCore.QThread):
     done=QtCore.Signal(list); fail=QtCore.Signal(str)
     def __init__(s, mat, spec, n_hist, thick): super().__init__(); s.mat=mat; s.spec=spec; s.n_hist=n_hist; s.thick=thick
@@ -415,11 +870,23 @@ class StragglingWorker(QtCore.QThread):
             s.fail.emit(f"{type(e).__name__}: {e}")
 
 class LateralWorker(QtCore.QThread):
-    done=QtCore.Signal(np.ndarray, np.ndarray, np.ndarray); fail=QtCore.Signal(str)
-    def __init__(s, part, T0, mat): super().__init__(); s.part=part; s.T0=T0; s.mat=mat
-    def run(s):
-        try: grid, xb, yb = P.lateral_straggling_2d(s.part, s.T0, s.mat); s.done.emit(grid, xb, yb)
-        except Exception as e: s.fail.emit(f"{type(e).__name__}: {e}")
+    done = QtCore.Signal(np.ndarray, np.ndarray, np.ndarray)
+    fail = QtCore.Signal(str)
+    
+    # ВОТ ЭТА СТРОКА БЫЛА УДАЛЕНА (инициализация аргументов)
+    def __init__(self, part, T0, mat): 
+        super().__init__() 
+        self.part = part
+        self.T0 = T0
+        self.mat = mat
+        
+    def run(self):
+        try: 
+            # Увеличили до 10000, чтобы трек был сплошным
+            grid, xb, yb = P.lateral_straggling_2d(self.part, self.T0, self.mat, n_particles=10000)
+            self.done.emit(grid, xb, yb)
+        except Exception as e: 
+            self.fail.emit(f"{type(e).__name__}: {e}")
 
 # ==========================================
 # ОСНОВНЫЕ МОДУЛИ
@@ -427,18 +894,22 @@ class LateralWorker(QtCore.QThread):
 class GammaTab(QtWidgets.QWidget):
     def __init__(s, console):
         super().__init__(); s.console=console; s.res=None; s.w=None; s.att_res=None; s.sel_mat = "air"; s.sel_iso = "Am-241"
-        root=QtWidgets.QHBoxLayout(s); p=QtWidgets.QWidget(); p.setFixedWidth(350); fl=QtWidgets.QFormLayout(p)
+        root=QtWidgets.QHBoxLayout(s); p=QtWidgets.QWidget(); p.setFixedWidth(420); fl=QtWidgets.QFormLayout(p)
         s.cb_geom = QtWidgets.QComboBox(); s.cb_geom.addItems(["Сфера", "Плоский слой"]); s.lbl_R = QtWidgets.QLabel("Радиус,см")
         btn_style = "background-color: #2b2b2b; color: #ffffff; text-align: left; padding-left: 10px; border: 1px solid #555555; border-radius: 4px;"
         s.btn_mat = QtWidgets.QPushButton("air"); s.btn_mat.setStyleSheet(btn_style); s.btn_mat.clicked.connect(s.select_material)
         s.btn_iso = QtWidgets.QPushButton("Am-241"); s.btn_iso.setStyleSheet(btn_style); s.btn_iso.clicked.connect(s.select_isotope)
         s.tbl_layers = QtWidgets.QTableWidget(3, 2); s.tbl_layers.setHorizontalHeaderLabels(["Материал", "Толщина,см"])
         s.tbl_layers.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.Stretch)
+        s.tbl_layers.verticalHeader().setDefaultSectionSize(35)
+        s.tbl_layers.setMinimumHeight(150) # Делаем таблицу повыше
+        s.tbl_layers.verticalHeader().setDefaultSectionSize(40) # Еще немного увеличиваем строки
         def update_total_thickness(): s.sp_R.setValue(sum(s.tbl_layers.cellWidget(i, 1).value() for i in range(3))); s.validate()
         for i in range(3):
             # Создаем кнопку вместо выпадающего списка
             btn_layer_mat = QtWidgets.QPushButton("lead" if i==0 else ("polyethylene" if i==1 else "concrete"))
             btn_layer_mat.setStyleSheet(btn_style)
+            btn_layer_mat.setMinimumHeight(30) # <--- Задаем высоту кнопки
             # Привязываем клик к открытию красивого диалога
             btn_layer_mat.clicked.connect(lambda checked=False, b=btn_layer_mat: s.select_layer_material(b))
             s.tbl_layers.setCellWidget(i, 0, btn_layer_mat)
@@ -451,21 +922,24 @@ class GammaTab(QtWidgets.QWidget):
         s.sp_t=QtWidgets.QDoubleSpinBox(); s.sp_t.setRange(0,1e12); s.sp_t.setValue(1.0); s.cb_tu=QtWidgets.QComboBox(); s.cb_tu.addItems(P.TIME_U.keys()); s.cb_tu.setCurrentText("ч")
         s.btn=QtWidgets.QPushButton("▶ Рассчитать"); s.btn.clicked.connect(s.run); s.btn.setStyleSheet("background:#2e7d32;color:white;font-weight:bold;padding:6px;")
         s.btn_export = QtWidgets.QPushButton("💾 Экспорт"); s.btn_export.clicked.connect(s.export_data)
+        s.btn_pdf = QtWidgets.QPushButton("📄 Скачать PDF-отчет"); s.btn_pdf.clicked.connect(s.export_pdf)
         s.sp_n.valueChanged.connect(s.validate); s.sp_R.valueChanged.connect(s.validate)
         def on_geom_change():
             if s.cb_geom.currentText() == "Сфера": s.lbl_R.setText("Радиус,см"); s.tbl_layers.setVisible(False); s.btn_mat.setVisible(True); s.sp_R.setReadOnly(False)
             else: s.lbl_R.setText("Общая толщина,см"); s.tbl_layers.setVisible(True); s.btn_mat.setVisible(False); s.sp_R.setReadOnly(True); update_total_thickness()
             s.validate()
         s.cb_geom.currentIndexChanged.connect(on_geom_change)
-        fl.addRow("Геометрия", s.cb_geom); fl.addRow("Материал", s.btn_mat); fl.addRow(s.tbl_layers); fl.addRow("Изотоп", s.btn_iso); fl.addRow(s.lbl_R,s.sp_R); fl.addRow("Историй",s.sp_n); fl.addRow("Seed",s.sp_seed); fl.addRow("",s.chk_abs); fl.addRow("Активность",s.sp_act); fl.addRow("Ед.акт",s.cb_au); fl.addRow("Время",s.sp_t); fl.addRow("Ед.вр",s.cb_tu); fl.addRow(s.btn); fl.addRow(s.btn_export)
+        fl.addRow("Геометрия", s.cb_geom); fl.addRow("Материал", s.btn_mat); fl.addRow(s.tbl_layers); fl.addRow("Изотоп", s.btn_iso); fl.addRow(s.lbl_R,s.sp_R); fl.addRow("Историй",s.sp_n); fl.addRow("Seed",s.sp_seed); fl.addRow("",s.chk_abs); fl.addRow("Активность",s.sp_act); fl.addRow("Ед.акт",s.cb_au); fl.addRow("Время",s.sp_t); fl.addRow("Ед.вр",s.cb_tu); fl.addRow(s.btn); fl.addRow(s.btn_export); fl.addRow(s.btn_pdf)
         btn_grid = QtWidgets.QGridLayout(); b_style = "background-color: #2b2b2b; color: white; border: 1px solid #555555; padding: 4px; border-radius: 4px;"
         b_hist = QtWidgets.QPushButton("📊 Гистограмма"); b_hist.setStyleSheet(b_style); b_hist.clicked.connect(s.show_coll_hist)
         b_polar = QtWidgets.QPushButton("📐 Полярный"); b_polar.setStyleSheet(b_style); b_polar.clicked.connect(s.show_polar_hist)
         b_att = QtWidgets.QPushButton("📉 Ослабление"); b_att.setStyleSheet(b_style); b_att.clicked.connect(s.run_attenuation)
         b_slice = QtWidgets.QPushButton("📏 1D-срез"); b_slice.setStyleSheet(b_style); b_slice.clicked.connect(s.show_slice)
+        b_err = QtWidgets.QPushButton("📊 Погрешность"); b_err.setStyleSheet(b_style); b_err.clicked.connect(s.run_error_estimation)
         btn_3d = QtWidgets.QPushButton("🚀 3D"); btn_3d.setStyleSheet(b_style); btn_3d.clicked.connect(lambda: launch_3d_view(s.console, mode="gamma", R=s.sp_R.value()))
         btn_pop = QtWidgets.QPushButton("🔍 Развернуть"); btn_pop.setStyleSheet(b_style); btn_pop.clicked.connect(lambda: PopOutDialog(s.fig, "Гамма-модуль", s).exec())
         btn_grid.addWidget(b_hist, 0, 0); btn_grid.addWidget(b_polar, 0, 1); btn_grid.addWidget(b_att, 1, 0); btn_grid.addWidget(b_slice, 1, 1); btn_grid.addWidget(btn_3d, 2, 0); btn_grid.addWidget(btn_pop, 2, 1)
+        btn_grid.addWidget(b_err, 3, 0)
         fl.addRow(btn_grid)
         s.pbar=QtWidgets.QProgressBar(); fl.addRow(s.pbar); root.addWidget(p)
         s.fig=Figure(figsize=(10,10),tight_layout=True); s.a1=s.fig.add_subplot(221); s.a2=s.fig.add_subplot(222); s.a3=s.fig.add_subplot(223); s.a4=s.fig.add_subplot(224)
@@ -506,6 +980,12 @@ class GammaTab(QtWidgets.QWidget):
         s.btn.setEnabled(True)
         s.validate()
         s.console("[ГАММА] ОШИБКА: "+m)
+        
+        # Отправка ошибки в Discord (System Alerts)
+        parent_main = s.window()
+        if hasattr(parent_main, 'sys_webhook') and parent_main.sys_webhook:
+            send_discord_notification(parent_main.sys_webhook, "⚠️ Ошибка расчета", f"Модуль: Гамма\nОшибка: `{m}`")
+        log_calculation("Гамма", {"материал": s.sel_mat}, {"summary": m[:100]}, status="error")
     def ok(s,r):
         s.res=r; s.btn.setEnabled(True); s.validate(); s.pbar.setValue(100)
         
@@ -533,16 +1013,49 @@ class GammaTab(QtWidgets.QWidget):
         s.a4.plot(r["r"],r["rad_dose"],"o-",color="darkorange"); s.a4.set_title("Профиль дозы")
         if np.any(r["rad_dose"]>0): s.a4.set_yscale("log")
         s.canvas.draw()
+        
+        # --- ОТПРАВКА В DISCORD (Красивая таблица) ---
+        parent_main = s.window()
+        if hasattr(parent_main, 'rad_webhook') and parent_main.rad_webhook:
+            fields = [
+                {"name": "☢️ Изотоп", "value": f"`{s.sel_iso}`", "inline": True},
+                {"name": "⏱️ Время", "value": f"`{r.get('elapsed_time', 0):.2f} сек`", "inline": True},
+                {"name": "📊 Доза (детектор)", "value": f"`{r['dose_detector']:.3e} Гр/ч`", "inline": False},
+                {"name": "🌫️ Фото/Комптон/Пары", "value": f"{r['nph']} / {r['nco']} / {r['npa']}", "inline": True},
+                {"name": "🛡️ Бугер (модель/теория)", "value": f"{r['nlk_uncoll']/r['n']:.4f} / {r['theor_escape']:.4f}", "inline": True}
+            ]
+            send_discord_notification(
+                parent_main.rad_webhook, 
+                "Гамма-расчет завершен", 
+                f"Расчет в материале `{s.sel_mat}` успешно завершен.", 
+                fields=fields
+            )
+        # --- ЛОГИРОВАНИЕ В СТАТИСТИКУ ---
+        log_calculation(
+            "Гамма",
+            {"материал": s.sel_mat, "изотоп": s.sel_iso, "историй": s.sp_n.value()},
+            {"time": r.get("elapsed_time", 0), "summary": f"Доза: {r['dose_detector']:.3e} Гр/ч"}
+        )
     def show_coll_hist(s):
         if not s.res: return
         fig = Figure(figsize=(8, 6), tight_layout=True); ax = fig.add_subplot(111)
         ax.bar(np.arange(len(s.res["coll_hist"])), s.res["coll_hist"], color="teal"); ax.set_title("Гистограмма столкновений")
-        win = QtWidgets.QDialog(s); win.resize(800, 600); canvas = FigureCanvas(fig); layout = QtWidgets.QVBoxLayout(win); layout.addWidget(canvas); canvas.draw(); win.exec()
+        
+        # ФИКС: Создаем окно, задаем заголовок, привязываем canvas и показываем
+        win = QtWidgets.QDialog(s); win.setWindowTitle("Гистограмма столкновений"); win.resize(800, 600)
+        canvas = FigureCanvas(fig); layout = QtWidgets.QVBoxLayout(win); layout.addWidget(canvas); canvas.draw(); win.exec()
     def show_polar_hist(s):
         if not s.res: return
         fig = Figure(figsize=(8, 8), tight_layout=True); ax = fig.add_subplot(111, projection='polar')
+        
+        # ФИКС: Сдвигаем цифры радиальной оси на 225 градусов (в пустую зону)
+        ax.set_rlabel_position(225) 
+        
         hist = s.res["theta_hist"]; angles = np.arccos((np.arange(90) + 0.5) / 45 - 1); ax.bar(angles, hist, width=np.pi/90, color="darkred")
-        win = QtWidgets.QDialog(s); win.resize(800, 800); canvas = FigureCanvas(fig); layout = QtWidgets.QVBoxLayout(win); layout.addWidget(canvas); canvas.draw(); win.exec()
+        
+        # ФИКС: Задаем заголовок окна
+        win = QtWidgets.QDialog(s); win.setWindowTitle("Полярная диаграмма рассеяния"); win.resize(800, 800)
+        canvas = FigureCanvas(fig); layout = QtWidgets.QVBoxLayout(win); layout.addWidget(canvas); canvas.draw(); win.exec()
     def run_attenuation(s):
         s.att_res = None; mat = P.make_gamma_mat(s.sel_mat); spec = P.ISOTOPES[s.sel_iso]["lines"]; thick = np.linspace(0, 20, 11)
         s.w_att = AttenuationWorker(mat, spec, 10000, thick); s.w_att.done.connect(s.show_attenuation_plot); s.w_att.start()
@@ -551,7 +1064,14 @@ class GammaTab(QtWidgets.QWidget):
         fig = Figure(figsize=(8, 6), tight_layout=True); ax = fig.add_subplot(111)
         x = [r[0] for r in results]; ax.plot(x, [r[1] for r in results], 'o-', label='Модель'); ax.plot(x, [r[2] for r in results], '--', color='red', label='Теория')
         ax.set_yscale("log"); ax.legend(); ax.grid(alpha=0.3)
-        win = QtWidgets.QDialog(s); win.resize(800, 600); canvas = FigureCanvas(fig); layout = QtWidgets.QVBoxLayout(win); layout.addWidget(canvas); canvas.draw(); win.exec()
+        
+        # ФИКС: Добавляем подписи осей
+        ax.set_xlabel("Толщина слоя, см")
+        ax.set_ylabel("Относительная интенсивность $I/I_0$")
+        
+        # ФИКС: Задаем заголовок окна
+        win = QtWidgets.QDialog(s); win.setWindowTitle("Закон Бугера"); win.resize(800, 600)
+        canvas = FigureCanvas(fig); layout = QtWidgets.QVBoxLayout(win); layout.addWidget(canvas); canvas.draw(); win.exec()
     def show_slice(s):
         if not s.res: return s.console("[ВИЗУАЛИЗАЦИЯ] Сначала выполните расчет!")
         dlg = SliceDialog(s.res["grid"], s.res["R"], s.res["geom"], s); dlg.exec()
@@ -569,12 +1089,94 @@ class GammaTab(QtWidgets.QWidget):
                 html = f"<html><body><h1>Отчет</h1><img src='data:image/png;base64,{img_main}'></body></html>"
                 with open(path, "w", encoding="utf-8") as f: f.write(html)
             s.console(f"[ЭКСПОРТ] Сохранено в {path}")
-        except Exception as e: s.console(f"[ЭКСПОРТ] ОШИБКА: {e}")
+        except Exception as e: s.console(f"[ЭКСПОРТ] ОШИБКА: {e}")       
+        
+    def export_pdf(s):
+        if not s.res: 
+            return s.console("[PDF] Сначала выполните расчет!")
+        
+        try:
+            import io
+            buf = io.BytesIO()
+            s.fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+            buf.seek(0)
+            
+            params = {
+                "Материал": s.sel_mat,
+                "Изотоп": s.sel_iso,
+                "Историй": s.sp_n.value(),
+                "Доза (детектор)": f"{s.res['dose_detector']:.3e} Гр/ч"
+            }
+            
+            path = generate_pdf_report(
+                parent=s, 
+                title="Гамма-модуль", 
+                params_dict=params, 
+                img_buf=buf, 
+                filename="gamma_report.pdf"
+            )
+            
+            if path: 
+                s.console(f"[PDF] Отчет успешно сохранен в {path}")
+                
+        except Exception as e:
+            s.console(f"[PDF] ОШИБКА: {e}")
+
+    def run_error_estimation(s):
+        if not s.res: return s.console("[ПОГРЕШНОСТЬ] Сначала выполните базовый расчет!")
+        s.console("[ПОГРЕШНОСТЬ] Запуск серии из 5 расчетов с разными Seed...")
+        
+        class ErrorWorker(QtCore.QThread):
+            done = QtCore.Signal(list)
+            def run(self):
+                import physics as P
+                doses = []
+                for i in range(5):
+                    p = s.p.copy()
+                    p["seed"] = s.sp_seed.value() + i * 100
+                    p["n_hist"] = 10000
+                    res = P.gamma_mc(**p)
+                    if res: doses.append(res["dose_detector"])
+                self.done.emit(doses)
+                
+        s.err_worker = ErrorWorker()
+        
+        def show_plot(doses):
+            import numpy as np
+            from matplotlib.figure import Figure
+            from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+            
+            fig = Figure(figsize=(8, 6), tight_layout=True)
+            ax = fig.add_subplot(111)
+            ax.plot(range(1, 6), doses, 'o-', color='crimson', label='Доза (детектор)')
+            
+            mean_dose = np.mean(doses)
+            std_dose = np.std(doses)
+            rel_err = (std_dose / mean_dose) * 100 if mean_dose > 0 else 0
+            
+            ax.axhline(mean_dose, color='black', linestyle='--', label=f'Среднее: {mean_dose:.3e}')
+            ax.fill_between(range(1, 6), mean_dose - std_dose, mean_dose + std_dose, color='gray', alpha=0.3, label=f'±σ (σ={rel_err:.1f}%)')
+            
+            ax.set_title("Оценка статистической погрешности Монте-Карло")
+            ax.set_xlabel("Номер прогона (разные Seed)")
+            ax.set_ylabel("Доза, Гр/ч-ца")
+            ax.legend()
+            ax.grid(alpha=0.3)
+            
+            win = QtWidgets.QDialog(s); win.setWindowTitle("Статистическая погрешность Монте-Карло"); win.resize(800, 600)
+            canvas = FigureCanvas(fig); layout = QtWidgets.QVBoxLayout(win)
+            layout.addWidget(canvas); canvas.draw(); win.exec()
+            s.console(f"[ПОГРЕШНОСТЬ] Результаты: Среднее={mean_dose:.3e}, Отклонение={rel_err:.2f}%")
+            
+        s.err_worker.done.connect(show_plot)
+        s.err_worker.start()
+
+
 
 class ChargedTab(QtWidgets.QWidget):
     def __init__(s, console):
         super().__init__(); s.console=console; s.res=None; s.sel_mat = "вода"; s.lat_dlg = None
-        root=QtWidgets.QHBoxLayout(s); p=QtWidgets.QWidget(); p.setFixedWidth(350); fl=QtWidgets.QFormLayout(p)
+        root=QtWidgets.QHBoxLayout(s); p=QtWidgets.QWidget(); p.setFixedWidth(450); fl=QtWidgets.QFormLayout(p)
         s.cb_p=QtWidgets.QComboBox(); s.cb_p.addItems(P.PARTICLES.keys()); s.cb_mode = QtWidgets.QComboBox(); s.cb_mode.addItems(["База данных", "Ручной ввод"]); s.cb_mode.currentIndexChanged.connect(s.toggle_mode)
         btn_style = "background-color: #2b2b2b; color: #ffffff; text-align: left; padding-left: 10px; border: 1px solid #555555; border-radius: 4px;"
         s.btn_mat = QtWidgets.QPushButton("вода"); s.btn_mat.setStyleSheet(btn_style); s.btn_mat.clicked.connect(s.select_material)
@@ -589,9 +1191,17 @@ class ChargedTab(QtWidgets.QWidget):
         s.chk_overlay = QtWidgets.QCheckBox("Наложение"); s.btn_clear = QtWidgets.QPushButton("Очистить"); s.btn_clear.clicked.connect(s.clear_plots)
         fl.addRow("Частица",s.cb_p); fl.addRow("Режим", s.cb_mode); fl.addRow("Материал",s.btn_mat); fl.addRow("", s.lbl_mat_info); fl.addRow(s.lbl_Z, s.sp_Z); fl.addRow(s.lbl_A, s.sp_A); fl.addRow(s.lbl_rho, s.sp_rho); fl.addRow(s.lbl_I, s.sp_I); fl.addRow("Энергия",s.sp_E); fl.addRow(b); fl.addRow(s.chk_overlay); fl.addRow(s.btn_clear)
         
-        btn_layout = QtWidgets.QHBoxLayout()
+        # --- СЕТКА КНОПОК (2 колонки) ---
+        btn_layout = QtWidgets.QGridLayout()
+        
         btn_3d = QtWidgets.QPushButton("🚀 3D"); btn_3d.setStyleSheet("background-color: #2b2b2b; color: white; border: 1px solid #555555; padding: 4px;")
         btn_3d.clicked.connect(lambda: launch_3d_view(s.console, mode="charged", data=(s.a1.lines[0].get_xdata(), s.a1.lines[0].get_ydata()) if s.a1.lines else None))
+        
+        btn_sobp = QtWidgets.QPushButton("📈 SOBP"); btn_sobp.setStyleSheet("background-color: #2b2b2b; color: white; border: 1px solid #555555; padding: 4px;")
+        btn_sobp.clicked.connect(s.run_sobp)
+
+        btn_comp = QtWidgets.QPushButton("📊 Сравнить ЛПЭ"); btn_comp.setStyleSheet("background-color: #2b2b2b; color: white; border: 1px solid #555555; padding: 4px;")
+        btn_comp.clicked.connect(s.run_comparison)
         
         btn_lat = QtWidgets.QPushButton("🌊 2D Пучок"); btn_lat.setStyleSheet("background-color: #2b2b2b; color: white; border: 1px solid #555555; padding: 4px;")
         btn_lat.clicked.connect(s.show_lateral)
@@ -599,9 +1209,20 @@ class ChargedTab(QtWidgets.QWidget):
         btn_pop = QtWidgets.QPushButton("🔍 Развернуть"); btn_pop.setStyleSheet("background-color: #2b2b2b; color: white; border: 1px solid #555555; padding: 4px;")
         btn_pop.clicked.connect(lambda: PopOutDialog(s.fig, "Заряженные частицы", s).exec())
         
-        btn_layout.addWidget(btn_3d); btn_layout.addWidget(btn_lat); btn_layout.addWidget(btn_pop)
-        fl.addRow(btn_layout)
+        btn_pdf = QtWidgets.QPushButton("📄 PDF-отчет"); btn_pdf.setStyleSheet("background-color: #2b2b2b; color: white; border: 1px solid #555555; padding: 4px;")
+        btn_pdf.clicked.connect(s.export_pdf)
         
+        # Располагаем в сетку 3x2
+        btn_layout.addWidget(btn_sobp, 0, 0)
+        btn_layout.addWidget(btn_comp, 0, 1)
+        
+        btn_layout.addWidget(btn_lat, 1, 0)
+        btn_layout.addWidget(btn_3d, 1, 1)
+        
+        btn_layout.addWidget(btn_pop, 2, 0)
+        btn_layout.addWidget(btn_pdf, 2, 1)
+        
+        fl.addRow(btn_layout)
         root.addWidget(p)
         s.fig=Figure(figsize=(10,8),tight_layout=True); s.a1=s.fig.add_subplot(221); s.a2=s.fig.add_subplot(222); s.a3=s.fig.add_subplot(223); s.a4=s.fig.add_subplot(224)
         s.canvas=FigureCanvas(s.fig); g=QtWidgets.QWidget(); gl=QtWidgets.QVBoxLayout(g); s.toolbar_g = NavToolbar(s.canvas,s); gl.addWidget(s.toolbar_g); gl.addWidget(s.canvas); root.addWidget(g,1); s.toggle_mode(); s.update_mat_info()
@@ -623,7 +1244,10 @@ class ChargedTab(QtWidgets.QWidget):
         mat_name = "Ручной ввод" if s.cb_mode.currentIndex() == 1 else s.sel_mat
         
         T0=s.sp_E.value()
-        R, dep, de = P.csda(pt, T0, mat) # <--- Теперь csda возвращает пробег (x)
+        import time as _t
+        _t_start = _t.perf_counter()
+        R, dep, de = P.csda(pt, T0, mat)
+        _elapsed = _t.perf_counter() - _t_start
         
         wr = {"протон": 2.0, "альфа": 20.0, "дейтрон": 2.0, "электрон": 1.0}.get(pt, 1.0)
         s.console(f"[ЗАРЯЖ] {pt} {T0} МэВ в {mat_name}: полный пробег={R:.3g} см, wR={wr:.0f}")
@@ -637,6 +1261,27 @@ class ChargedTab(QtWidgets.QWidget):
         s.canvas.draw()
         
         s.w_str = StragglingWorker(pt, T0, mat); s.w_str.done.connect(lambda ranges: s.draw_straggling(ranges, color)); s.w_str.start()
+        # --- ОТПРАВКА В DISCORD ---
+        parent_main = s.window()
+        if hasattr(parent_main, 'rad_webhook') and parent_main.rad_webhook:
+            fields = [
+                {"name": "⚛️ Частица", "value": f"`{pt}`", "inline": True},
+                {"name": "🛡️ Материал", "value": f"`{mat_name}`", "inline": True},
+                {"name": "⚡ Энергия", "value": f"`{T0} МэВ`", "inline": True},
+                {"name": "📏 Пробег", "value": f"`{R:.3g} см`", "inline": False}
+            ]
+            send_discord_notification(
+                parent_main.rad_webhook, 
+                "Расчет заряженных частиц", 
+                f"Успешно рассчитан пробег.", 
+                fields=fields
+            )
+        # --- ЛОГИРОВАНИЕ В СТАТИСТИКУ ---
+        log_calculation(
+            "Заряженные",
+            {"частица": pt, "материал": mat_name, "энергия": T0},
+            {"time": _elapsed, "summary": f"Пробег: {R:.3g} см"}
+        )
         
     def draw_straggling(s, ranges, color):
         s.a4.clear(); s.a4.hist(ranges, bins=15, color=color); s.a4.set_title("Страгглинг (разброс пробегов)")
@@ -654,17 +1299,144 @@ class ChargedTab(QtWidgets.QWidget):
         if s.lat_dlg is None: s.lat_dlg = LateralPlotDialog(s)
         s.w_lat = LateralWorker(pt, T0, mat); s.w_lat.done.connect(s.lat_dlg.update_plot); s.w_lat.start()
         s.lat_dlg.show()
+    def export_pdf(s):
+        import io
+        buf = io.BytesIO()
+        s.fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        buf.seek(0)
+        
+        params = {"Частица": s.cb_p.currentText(), "Материал": s.sel_mat, "Энергия, МэВ": s.sp_E.value()}
+        path = generate_pdf_report(s, "Заряженные частицы", params, buf, "charged_report.pdf")
+        if path: s.console(f"[PDF] Отчет сохранен: {path}")
+
+    def run_sobp(s):
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+        
+        s.console("[ЗАРЯЖ] Генерация SOBP для протонной терапии...")
+        mat = {"Z": s.sp_Z.value(), "A": s.sp_A.value(), "rho": s.sp_rho.value(), "I": s.sp_I.value()} if s.cb_mode.currentIndex() == 1 else P.CP_MAT[s.sel_mat]
+        
+        # 1. УВЕЛИЧИВАЕМ КОЛИЧЕСТВО ПУЧКОВ (шаг 1 МэВ вместо 5 МэВ)
+        energies = np.linspace(90, 110, 21) 
+        
+        R_max, _, _ = P.csda("протон", max(energies), mat)
+        x_common = np.linspace(0, R_max * 1.05, 1000) 
+        total_dose = np.zeros_like(x_common)
+        
+        fig = Figure(figsize=(8, 6), tight_layout=True)
+        ax = fig.add_subplot(111)
+        
+        # Показываем на графике только 3 крайних и центральный пучок, чтобы не засорять легенду
+        show_beams = [90, 100, 110]
+        
+        for E in energies:
+            R, dep, de = P.csda("протон", E, mat)
+            
+            de_clipped = np.clip(de, 0, np.percentile(de, 98))
+            if np.max(de_clipped) > 0:
+                de_norm = de_clipped / np.max(de_clipped)
+            else:
+                de_norm = de_clipped
+            
+            dose_interp = np.interp(x_common, dep, de_norm, left=0, right=0)
+            
+            # 2. ИМИТИРУЕМ СТРАГГЛИНГ (сглаживаем каждый пик скользящим средним)
+            dose_interp = np.convolve(dose_interp, np.ones(21)/21.0, mode='same')
+            
+            total_dose += dose_interp
+            
+            # Рисуем только выбранные пучки
+            if int(E) in show_beams:
+                ax.plot(x_common, dose_interp, '--', alpha=0.4, label=f'{int(E)} МэВ (вклад)')
+                
+        # 3. Нормируем итоговое плато на максимум (чтобы график был красивым)
+        if np.max(total_dose) > 0:
+            total_dose = total_dose / np.max(total_dose)
+            
+        ax.plot(x_common, total_dose, 'k-', lw=3, label='Итоговый SOBP (плато)')
+        
+        ax.set_title("Spread-Out Bragg Peak (Протонная терапия)")
+        ax.set_xlabel("Глубина в ткани, см")
+        ax.set_ylabel("Относительная доза")
+        ax.legend()
+        ax.grid(alpha=0.3)
+        
+        win = QtWidgets.QDialog(s); win.setWindowTitle("SOBP"); win.resize(800, 600)
+        canvas = FigureCanvas(fig); layout = QtWidgets.QVBoxLayout(win)
+        layout.addWidget(canvas); canvas.draw(); win.exec()
+
+    def run_comparison(s):
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+        
+        s.console("[ЗАРЯЖ] Сравнение тормозных способностей (протон vs электрон)...")
+        mat = {"Z": s.sp_Z.value(), "A": s.sp_A.value(), "rho": s.sp_rho.value(), "I": s.sp_I.value()} if s.cb_mode.currentIndex() == 1 else P.CP_MAT[s.sel_mat]
+        
+        E_arr = np.logspace(0, 2.3, 100) # От 1 до 200 МэВ
+        proton_dedx = [P.sp_heavy(E, P.MP, 1, mat) for E in E_arr]
+        elec_dedx = [P.sp_elec(E, mat)[0] for E in E_arr]
+        
+        fig = Figure(figsize=(8, 6), tight_layout=True)
+        ax = fig.add_subplot(111)
+        
+        ax.plot(E_arr, proton_dedx, color='crimson', lw=2, label='Протон (Бете-Блох)')
+        ax.plot(E_arr, elec_dedx, color='blue', lw=2, label='Электрон (Berger-Seltzer)')
+        
+        ax.set_title(f"Сравнение тормозных способностей (материал: {s.sel_mat})")
+        ax.set_xlabel("Энергия, МэВ")
+        ax.set_ylabel("dE/dx, МэВ/см")
+        ax.set_xscale("log"); ax.set_yscale("log")
+        ax.legend(); ax.grid(alpha=0.3, which="both")
+        
+        win = QtWidgets.QDialog(s); win.setWindowTitle("Сравнение ЛПЭ"); win.resize(800, 600)
+        canvas = FigureCanvas(fig); layout = QtWidgets.QVBoxLayout(win)
+        layout.addWidget(canvas); canvas.draw(); win.exec()
+
+class ModeratorWorker(QtCore.QThread):
+    done = QtCore.Signal(list)
+    msg = QtCore.Signal(str)
+
+    def __init__(s, base_cfg, materials, colors, labels):
+        super().__init__()
+        s.base_cfg = base_cfg
+        s.materials = materials
+        s.colors = colors
+        s.labels = labels
+
+    def run(s):
+        results = []
+        for mat, color, label in zip(s.materials, s.colors, s.labels):
+            s.msg.emit(f"[НЕЙТРОНЫ] Расчет для материала: {mat}...")
+            cfg = s.base_cfg.copy()
+            cfg["material"] = mat
+            try:
+                # Если Docker выбран, используем его, иначе WSL
+                if s.engine == "docker":
+                    res = P.run_neutrons_docker(cfg, s.msg.emit)
+                else:
+                    res = P.run_neutrons_wsl(cfg, s.msg.emit)
+                    
+                st = res["stats"]
+                E = st.get("spectrum_E", [])
+                flux = st.get("spectrum_flux", [])
+                if E and flux:
+                    results.append((E, flux, color, label))
+            except Exception as e:
+                s.msg.emit(f"[НЕЙТРОНЫ] Ошибка для {mat}: {e}")
+        s.done.emit(results)
 
 class NeutronTab(QtWidgets.QWidget):
     def __init__(s, console):
         super().__init__(); s.console=console; s.w=None; s.sel_mat = "water"
-        root=QtWidgets.QHBoxLayout(s); p=QtWidgets.QWidget(); p.setFixedWidth(350); fl=QtWidgets.QFormLayout(p)
+        root=QtWidgets.QHBoxLayout(s); p=QtWidgets.QWidget(); p.setFixedWidth(400); fl=QtWidgets.QFormLayout(p)
         
-        # Кнопка выбора материала (вместо выпадающего списка)
         s.btn_m = QtWidgets.QPushButton("water")
         s.btn_m.setStyleSheet("background-color: #2b2b2b; color: #ffffff; text-align: left; padding-left: 10px; border: 1px solid #555555; border-radius: 4px;")
         s.btn_m.clicked.connect(s.select_material)
         
+        s.cb_engine = QtWidgets.QComboBox()
+        s.cb_engine.addItems(["Docker (Рекомендуется)", "WSL (Устаревший)"])
+        fl.addRow("Движок", s.cb_engine)
         s.cb_spec = QtWidgets.QComboBox()
         s.cb_spec.addItems(["Моноэнергетический", "Спектр U-235", "Спектр Cf-252"])
         s.sp_R=QtWidgets.QDoubleSpinBox(); s.sp_R.setRange(1,200); s.sp_R.setValue(30)
@@ -686,19 +1458,33 @@ class NeutronTab(QtWidgets.QWidget):
         fl.addRow("Разрешение сетки", s.sp_mesh) 
         fl.addRow(s.btn)
         
-        btn_layout = QtWidgets.QHBoxLayout()
+        # Сетка кнопок
+        btn_layout = QtWidgets.QGridLayout()
+        
+        s.btn_mod = QtWidgets.QPushButton("📉 Сравнить замедлители"); s.btn_mod.setStyleSheet("background-color: #2b2b2b; color: white; border: 1px solid #555555; padding: 4px;")
+        s.btn_mod.clicked.connect(s.run_moderator_comparison)
+        
         btn_3d = QtWidgets.QPushButton("🚀 3D"); btn_3d.setStyleSheet("background-color: #2b2b2b; color: white; border: 1px solid #555555; padding: 4px;")
         btn_3d.clicked.connect(lambda: launch_3d_view(s.console, mode="neutron", R=s.sp_R.value()))
+        
         btn_pop = QtWidgets.QPushButton("🔍 Развернуть"); btn_pop.setStyleSheet("background-color: #2b2b2b; color: white; border: 1px solid #555555; padding: 4px;")
         btn_pop.clicked.connect(lambda: PopOutDialog(s.fig, "Нейтроны", s).exec())
-        btn_layout.addWidget(btn_3d); btn_layout.addWidget(btn_pop); fl.addRow(btn_layout)
+        
+        btn_pdf = QtWidgets.QPushButton("📄 PDF-отчет"); btn_pdf.setStyleSheet("background-color: #2b2b2b; color: white; border: 1px solid #555555; padding: 4px;")
+        btn_pdf.clicked.connect(s.export_pdf)
+        
+        btn_layout.addWidget(s.btn_mod, 0, 0, 1, 2) 
+        btn_layout.addWidget(btn_3d, 1, 0)
+        btn_layout.addWidget(btn_pop, 1, 1)
+        btn_layout.addWidget(btn_pdf, 2, 0, 1, 2)
+        
+        fl.addRow(btn_layout)
         
         root.addWidget(p)
         s.fig=Figure(figsize=(10,8),tight_layout=True); s.a1=s.fig.add_subplot(211); s.a2=s.fig.add_subplot(212)
         s.canvas=FigureCanvas(s.fig); g=QtWidgets.QWidget(); gl=QtWidgets.QVBoxLayout(g); s.toolbar_g = NavToolbar(s.canvas,s); gl.addWidget(s.toolbar_g); gl.addWidget(s.canvas); root.addWidget(g,1)
     
     def select_material(s):
-        # Список ВСЕХ материалов для нейтронов
         mats = {k: {} for k in [
             "water", "heavy_water", "polyethylene", "borated_polyethylene", 
             "concrete", "concrete_magnetite", "iron", "steel_304", "lead", 
@@ -724,12 +1510,290 @@ class NeutronTab(QtWidgets.QWidget):
             "mesh_n": s.sp_mesh.value(), 
             "spectrum": spec
         }
-        s.btn.setEnabled(False); s.console("[НЕЙТРОНЫ] запуск..."); s.w=NeutronWorker(cfg); s.w.msg.connect(s.console); s.w.done.connect(s.ok); s.w.fail.connect(lambda m: s.console("[ОШИБКА] "+m)); s.w.start()
-    
+        s.btn.setEnabled(False); s.console("[НЕЙТРОНЫ] запуск...")
+        
+        engine = "docker" if "Docker" in s.cb_engine.currentText() else "wsl"
+        
+        class EngineWorker(QtCore.QThread):
+            done = QtCore.Signal(dict)
+            fail = QtCore.Signal(str)
+            msg = QtCore.Signal(str)
+            def run(self):
+                try:
+                    if engine == "docker":
+                        res = P.run_neutrons_docker(cfg, lambda m: self.msg.emit(m))
+                    else:
+                        res = P.run_neutrons_wsl(cfg, lambda m: self.msg.emit(m))
+                    self.done.emit(res)
+                except Exception as e:
+                    self.fail.emit(f"{type(e).__name__}: {e}")
+                    
+        s.w = EngineWorker()
+        s.w.msg.connect(s.console)
+        s.w.done.connect(s.ok)
+        s.w.fail.connect(lambda m: s.console("[ОШИБКА] " + m))
+        s.w.start()
+        
     def ok(s,r):
+        s.last_res = r
         s.btn.setEnabled(True); st=r["stats"]; s.console(f"[НЕЙТРОНЫ] доза: {st.get('dose', 0):.4e} Зв")
-        import matplotlib.image as mpimg; s.a1.clear(); s.a2.clear(); s.a1.imshow(mpimg.imread(r["spec_img"])); s.a1.axis("off"); s.a2.imshow(mpimg.imread(r["map_img"])); s.a2.axis("off"); s.canvas.draw()
+        
+        # --- ОТПРАВКА В DISCORD ---
+        parent_main = s.window()
+        if hasattr(parent_main, 'rad_webhook') and parent_main.rad_webhook:
+            fields = [
+                {"name": "🛡️ Материал", "value": f"`{s.sel_mat}`", "inline": True},
+                {"name": "🎯 Спектр", "value": f"`{s.cb_spec.currentText()}`", "inline": True},
+                {"name": "📏 Радиус", "value": f"`{s.sp_R.value()} см`", "inline": True},
+                {"name": "☢️ Доза (ICRP-74)", "value": f"`{st.get('dose', 0):.4e} Зв`", "inline": False}
+            ]
+            send_discord_notification(
+                parent_main.rad_webhook, 
+                "Нейтронный расчет завершен", 
+                f"Моделирование в материале `{s.sel_mat}` успешно завершено.", 
+                fields=fields
+            )
 
+        import matplotlib.image as mpimg; s.a1.clear(); s.a2.clear(); s.a1.imshow(mpimg.imread(r["spec_img"])); s.a1.axis("off"); s.a2.imshow(mpimg.imread(r["map_img"])); s.a2.axis("off"); s.canvas.draw()
+        
+        # --- ЛОГИРОВАНИЕ В СТАТИСТИКУ ---
+        log_calculation(
+            "Нейтроны",
+            {"материал": s.sel_mat, "спектр": s.cb_spec.currentText(), "радиус": s.sp_R.value()},
+            {"time": 0, "summary": f"Доза: {st.get('dose', 0):.4e} Зв"}
+        )
+
+    def export_pdf(s):
+        if not hasattr(s, 'last_res') or not s.last_res: return s.console("[PDF] Сначала выполните расчет нейтронов!")
+        import io
+        buf = io.BytesIO()
+        s.fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        buf.seek(0)
+        params = {"Материал": s.sel_mat, "Радиус, см": s.sp_R.value(), "Спектр": s.cb_spec.currentText()}
+        path = generate_pdf_report(s, "Нейтронный модуль", params, buf, "neutron_report.pdf")
+        if path: s.console(f"[PDF] Отчет сохранен: {path}")
+
+    def run_moderator_comparison(s):
+        s.btn_mod.setEnabled(False)
+        s.console("[НЕЙТРОНЫ] Запуск сравнения 3 замедлителей...")
+        s.console("[НЕЙТРОНЫ] Это займет несколько минут. Пожалуйста, подождите.")
+        
+        materials = ["water", "graphite", "heavy_water"]
+        colors = ["blue", "black", "red"]
+        labels = ["Вода (H2O)", "Графит (C)", "Тяжелая вода (D2O)"]
+        
+        base_cfg = {
+            "radius": s.sp_R.value(), 
+            "energy_MeV": s.sp_E.value(), 
+            "particles": 5000, 
+            "batches": 10, 
+            "mesh_n": 40, 
+            "spectrum": "mono" if s.cb_spec.currentText() == "Моноэнергетический" else "u235"
+        }
+        
+        engine = "docker" if "Docker" in s.cb_engine.currentText() else "wsl"
+        s.mod_worker = ModeratorWorker(base_cfg, materials, colors, labels)
+        s.mod_worker.engine = engine
+        s.mod_worker.msg.connect(s.console)
+        
+        def on_done(results):
+            s.btn_mod.setEnabled(True)
+            if not results:
+                return s.console("[НЕЙТРОНЫ] Не удалось получить данные для сравнения.")
+                
+            fig = Figure(figsize=(10, 6), tight_layout=True)
+            ax = fig.add_subplot(111)
+            for E, flux, color, label in results:
+                ax.plot(E, flux, color=color, lw=2, label=label)
+                
+            ax.set_title("Спектры нейтронов в разных замедлителях")
+            ax.set_xlabel("Энергия нейтронов, эВ")
+            ax.set_ylabel("Поток")
+            ax.set_xscale("log"); ax.set_yscale("log")
+            ax.legend(); ax.grid(alpha=0.3, which="both")
+            
+            win = QtWidgets.QDialog(s); win.setWindowTitle("Сравнение замедлителей"); win.resize(900, 600)
+            canvas = FigureCanvas(fig); layout = QtWidgets.QVBoxLayout(win)
+            layout.addWidget(canvas); canvas.draw(); win.exec()
+            s.console("[НЕЙТРОНЫ] Сравнение завершено!")
+            
+        s.mod_worker.done.connect(on_done)
+        s.mod_worker.start()
+
+class Gta6Tab(QtWidgets.QWidget):
+    def __init__(s):
+        super().__init__()
+        
+        s.setStyleSheet("""
+            QWidget {
+                background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0f0c29, stop:0.5 #302b63, stop:1 #24243e);
+                color: #ffffff;
+            }
+            QLabel#title { 
+                color: #ff007f; 
+                font-family: 'Impact', 'Arial Black', sans-serif; 
+                font-size: 54px; 
+                font-weight: bold;
+                letter-spacing: 3px;
+            }
+            QLabel#subtitle {
+                color: #00ffff;
+                font-family: Consolas, monospace;
+                font-size: 18px;
+                letter-spacing: 1px;
+            }
+            QFrame#regionFrame {
+                background-color: rgba(0, 0, 0, 0.6);
+                border: 2px solid #ff007f;
+                border-radius: 8px;
+                padding: 10px;
+            }
+            QLabel#regionName { 
+                color: #ffffff; 
+                font-weight: bold; 
+                font-size: 18px; 
+                font-family: "Segoe UI", sans-serif;
+            }
+            QLabel#regionCode {
+                color: #ff007f;
+                font-family: Consolas;
+                font-weight: bold;
+                font-size: 16px;
+                background-color: rgba(255, 0, 127, 0.2);
+                padding: 2px 6px;
+                border-radius: 4px;
+            }
+            QLabel#timer { 
+                color: #00ffff; 
+                font-family: Consolas; 
+                font-size: 22px; 
+                font-weight: bold;
+            }
+        """)
+        
+        layout = QtWidgets.QVBoxLayout(s)
+        layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        layout.setSpacing(20)
+        
+        title = QtWidgets.QLabel("GRAND THEFT AUTO VI")
+        title.setObjectName("title")
+        title.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        
+        subtitle = QtWidgets.QLabel("COUNTDOWN TO RELEASE: 19.11.2026")
+        subtitle.setObjectName("subtitle")
+        subtitle.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addSpacing(20)
+        
+        grid = QtWidgets.QGridLayout()
+        grid.setSpacing(15)
+        
+        # Добавили коды стран (RU, US и т.д.) отдельно от названия
+        s.regions = [
+            ("RU", "Москва", 3),
+            ("US", "Нью-Йорк", -5),
+            ("GB", "Лондон", 0),
+            ("JP", "Токио", 9),
+            ("AU", "Сидней", 11),
+            ("US", "Лос-Анджелес", -8)
+        ]
+        
+        s.timers = {}
+        for i, (code, name, offset) in enumerate(s.regions):
+            frame = QtWidgets.QFrame()
+            frame.setObjectName("regionFrame")
+            flayout = QtWidgets.QHBoxLayout(frame)
+            flayout.setSpacing(10)
+            
+            lbl_code = QtWidgets.QLabel(code)
+            lbl_code.setObjectName("regionCode")
+            
+            lbl_name = QtWidgets.QLabel(name)
+            lbl_name.setObjectName("regionName")
+            
+            lbl_time = QtWidgets.QLabel("00 д. 00:00:00")
+            lbl_time.setObjectName("timer")
+            lbl_time.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
+            
+            flayout.addWidget(lbl_code)
+            flayout.addWidget(lbl_name)
+            flayout.addStretch()
+            flayout.addWidget(lbl_time)
+            
+            grid.addWidget(frame, i // 2, i % 2)
+            s.timers[offset] = lbl_time
+            
+        layout.addLayout(grid)
+        layout.addSpacing(20)
+        
+        quote = QtWidgets.QLabel('"Maybe we can just... go to the beach."')
+        quote.setStyleSheet("color: #8888aa; font-style: italic; font-size: 16px;")
+        quote.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(quote)
+        
+        s.timer = QtCore.QTimer(s)
+        s.timer.timeout.connect(s.update_timers)
+        s.timer.start(1000)
+        s.update_timers()
+        
+    def update_timers(s):
+        from datetime import datetime, timezone, timedelta
+        
+        now_utc = datetime.now(timezone.utc)
+        
+        for offset, lbl in s.timers.items():
+            try:
+                tz = timezone(timedelta(hours=offset))
+                local_release = datetime(2026, 11, 19, 0, 0, tzinfo=tz)
+                local_now = now_utc.astimezone(tz)
+                
+                if local_now >= local_release:
+                    lbl.setText("GTA 6 IS OUT! GO PLAY!")
+                    lbl.setStyleSheet("color: #66bb6a; font-weight: bold;")
+                    continue
+                    
+                local_diff = local_release - local_now
+                
+                days = local_diff.days
+                seconds = local_diff.seconds
+                hours = seconds // 3600
+                minutes = (seconds % 3600) // 60
+                secs = seconds % 60
+                
+                lbl.setText(f"{days} д. {hours:02d}:{minutes:02d}:{secs:02d}")
+            except Exception:
+                lbl.setText("N/A")
+        
+    def update_timers(s):
+        from datetime import datetime, timezone, timedelta
+        
+        now_utc = datetime.now(timezone.utc)
+        
+        for offset, lbl in s.timers.items():
+            try:
+                # Каждый регион ждет СВОЮ локальную полночь 19 ноября
+                tz = timezone(timedelta(hours=offset))
+                local_release = datetime(2026, 11, 19, 0, 0, tzinfo=tz)
+                local_now = now_utc.astimezone(tz)
+                
+                if local_now >= local_release:
+                    lbl.setText("GTA 6 IS OUT! GO PLAY!")
+                    lbl.setStyleSheet("color: #66bb6a; font-weight: bold;")
+                    continue
+                    
+                local_diff = local_release - local_now
+                
+                days = local_diff.days
+                seconds = local_diff.seconds
+                hours = seconds // 3600
+                minutes = (seconds % 3600) // 60
+                secs = seconds % 60
+                
+                lbl.setText(f"{days} д. {hours:02d}:{minutes:02d}:{secs:02d}")
+            except Exception:
+                lbl.setText("N/A")
 class HotkeysDialog(QtWidgets.QDialog):
     def __init__(s, parent=None):
         super().__init__(parent); s.setWindowTitle("Горячие клавиши"); s.resize(500, 400)
@@ -748,7 +1812,7 @@ class AboutDialog(QtWidgets.QDialog):
         title.setStyleSheet("font-size: 24px; font-weight: bold; color: #2e7d32;")
         title.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         
-        version = QtWidgets.QLabel("Версия 4.0.0 (Dev)")
+        version = QtWidgets.QLabel("Версия 5.0.0 (Dev)")
         version.setStyleSheet("font-size: 14px; color: #888888;")
         version.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         
@@ -894,6 +1958,15 @@ class TestSuiteDialog(QtWidgets.QDialog):
         
     def on_finished(s, success):
         s.btn_run.setEnabled(True)
+        
+        # Отправка результата тестов в Discord (System Alerts)
+        parent_main = s.window()
+        if hasattr(parent_main, 'sys_webhook') and parent_main.sys_webhook:
+            if success:
+                send_discord_notification(parent_main.sys_webhook, "✅ Самодиагностика", "Все тесты успешно пройдены. Система готова к работе.")
+            else:
+                send_discord_notification(parent_main.sys_webhook, "❌ Самодиагностика", "Обнаружены ошибки при проверке системы. Требуется вмешательство.")
+                
         if success:
             s.lbl_status.setText("СТАТУС: ВСЕ ТЕСТЫ ПРОЙДЕНЫ (OK)")
             s.lbl_status.setStyleSheet("font-weight: bold; color: #66bb6a;")
@@ -904,13 +1977,32 @@ class TestSuiteDialog(QtWidgets.QDialog):
 class Main(QtWidgets.QMainWindow):
     def __init__(s):
         super().__init__()
-        s.setWindowTitle("Prometheus Core v3.1.0 (Dev)"); s.setWindowIcon(make_app_icon()); s.dark_mode = True
+        s.setWindowTitle("Prometheus Core v5.0.0 (Dev)"); s.setWindowIcon(make_app_icon()); s.dark_mode = True
         menubar = s.menuBar(); file_menu = menubar.addMenu("Файл")
         act_save = QtGui.QAction("Сохранить (Ctrl+S)", s); act_save.triggered.connect(s.save_session); file_menu.addAction(act_save)
         act_load = QtGui.QAction("Загрузить (Ctrl+O)", s); act_load.triggered.connect(s.load_session); file_menu.addAction(act_load)
         file_menu.addSeparator(); act_exit = QtGui.QAction("Выход", s); act_exit.triggered.connect(s.close); file_menu.addAction(act_exit)
+        
         view_menu = menubar.addMenu("Вид"); act_theme = QtGui.QAction("Сменить тему (Ctrl+T)", s); act_theme.triggered.connect(s.toggle_theme); view_menu.addAction(act_theme)
+        
+        # --- НАСТРОЙКИ DISCORD (БЕЗ ДУБЛИКАТОВ) ---
         help_menu = menubar.addMenu("Справка")
+        
+        s.rad_webhook = ""
+        s.sys_webhook = ""
+        if os.path.exists("config.json"):
+            try:
+                with open("config.json", "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+                    s.rad_webhook = cfg.get("discord_webhook_radiation", "")
+                    s.sys_webhook = cfg.get("discord_webhook_system", "")
+            except Exception as e: 
+                print(f"Ошибка чтения конфига: {e}")
+
+        act_discord = QtGui.QAction("Настройки Discord...", s)
+        act_discord.triggered.connect(s.setup_discord)
+        help_menu.addAction(act_discord)
+        
         act_hotkeys = QtGui.QAction("Горячие клавиши (F1)", s)
         act_hotkeys.triggered.connect(s.show_hotkeys)
         help_menu.addAction(act_hotkeys)
@@ -930,6 +2022,8 @@ class Main(QtWidgets.QMainWindow):
         act_about = QtGui.QAction("О программе", s)
         act_about.triggered.connect(lambda: AboutDialog(s).exec())
         help_menu.addAction(act_about)
+        # ------------------------------------------
+
         # Меняем QPlainTextEdit на QTextEdit для поддержки HTML (цветов)
         s.con=QtWidgets.QTextEdit(); s.con.setReadOnly(True); s.con.setMaximumHeight(200); s.con.setStyleSheet("font-family:Consolas;font-size:12px;background:#1e1e1e;color:#d4d4d4;")
         P.attach_log_widget(s.con); P.setup_log_file(OUT)
@@ -937,6 +2031,9 @@ class Main(QtWidgets.QMainWindow):
         
         s.gtab = GammaTab(console); s.ctab = ChargedTab(console); s.ntab = NeutronTab(console)
         s.gentab = GeneratorTab(console, s.gtab); s.sandbox = SandboxTab(console); s.clitab = CliTab(console)
+        s.idetab = IdeTab(console)
+        s.statstab = StatsTab(console)
+        s.gta6tab = Gta6Tab()
         
         tabs=QtWidgets.QTabWidget()
         tabs.addTab(s.gtab,"☢️ Гамма"); tabs.addTab(s.ctab,"⚙️ Заряженные")
@@ -946,6 +2043,9 @@ class Main(QtWidgets.QMainWindow):
             
         tabs.addTab(s.gentab, "🧪 Генератор"); tabs.addTab(s.sandbox,"🏖️ Песочница"); tabs.addTab(s.clitab, "💻 CLI-Конструктор")
         tabl=s._mat_table(); tabs.addTab(tabl,"📋 Таблица материалов")
+        tabs.addTab(s.idetab, "💻 Мини-IDE")
+        tabs.addTab(s.statstab, "📊 Статистика")
+        tabs.addTab(s.gta6tab, "🌴 GTA VI")
         
         c=QtWidgets.QWidget(); v=QtWidgets.QVBoxLayout(c); v.addWidget(tabs,1); 
         
@@ -964,28 +2064,56 @@ class Main(QtWidgets.QMainWindow):
         s.status = s.statusBar(); s.status.showMessage(f"Готово | Материалов: {len(P.GAMMA_MATS)} | Изотопов: {len(P.ISOTOPES)}")
         QtGui.QShortcut(QtGui.QKeySequence("Ctrl+R"), s, activated=s.run_active_tab); QtGui.QShortcut(QtGui.QKeySequence("Ctrl+E"), s, activated=s.export_active_tab); QtGui.QShortcut(QtGui.QKeySequence("Ctrl+S"), s, activated=s.save_session); QtGui.QShortcut(QtGui.QKeySequence("Ctrl+O"), s, activated=s.load_session); QtGui.QShortcut(QtGui.QKeySequence("Ctrl+T"), s, activated=s.toggle_theme); QtGui.QShortcut(QtGui.QKeySequence("F1"), s, activated=s.show_hotkeys)
         s.tabs = tabs
+        tabs.currentChanged.connect(lambda idx: s.statstab.refresh_stats() if idx == tabs.count()-1 else None)
+
     def run_active_tab(s):
         idx = s.tabs.currentIndex()
         if idx == 0: s.gtab.run()
         elif idx == 1: s.ctab.run()
         elif idx == 2: s.ntab.run()
+        
     def export_active_tab(s):
         if s.tabs.currentIndex() == 0: s.gtab.export_data()
-    def show_hotkeys(s): HotkeysDialog(s).exec()
+
+    def show_hotkeys(s): 
+        HotkeysDialog(s).exec()
+
+    def setup_discord(s):
+        # 1. Запрашиваем ссылку для расчетов
+        url_rad, ok1 = QtWidgets.QInputDialog.getText(s, "Discord: Radiation Logs", 
+            "Вставьте URL вебхука для канала #radiation-logs (расчеты):", text=s.rad_webhook)
+        if not ok1: return
+        
+        # 2. Запрашиваем ссылку для системных событий
+        url_sys, ok2 = QtWidgets.QInputDialog.getText(s, "Discord: System Alerts", 
+            "Вставьте URL вебхука для канала #system-alerts (тесты, ошибки):", text=s.sys_webhook)
+        if not ok2: return
+        
+        s.rad_webhook = url_rad
+        s.sys_webhook = url_sys
+        
+        import json
+        with open("config.json", "w") as f:
+            json.dump({"discord_webhook_radiation": url_rad, "discord_webhook_system": url_sys}, f)
+        s.con.append("[СИСТЕМА] Настройки Discord успешно сохранены.")
+
     def run_validation(s):
         report = validator.run_validation(log_cb=lambda msg, level="info": P.plog(msg, level))
         dlg = QtWidgets.QDialog(s); dlg.setWindowTitle("Верификация NIST"); dlg.resize(800, 500)
         layout = QtWidgets.QVBoxLayout(dlg); text = QtWidgets.QPlainTextEdit(); text.setPlainText(report); text.setReadOnly(True); layout.addWidget(text)
         btn = QtWidgets.QPushButton("Закрыть"); btn.clicked.connect(dlg.accept); layout.addWidget(btn); dlg.exec()
+        
     def toggle_theme(s):
         s.dark_mode = not s.dark_mode; app = QtWidgets.QApplication.instance()
         if s.dark_mode: app.setStyle("Fusion"); s.setStyleSheet(""); s.con.setStyleSheet("font-family:Consolas;font-size:12px;background:#1e1e1e;color:#d4d4d4;")
         else: app.setStyle("Fusion"); s.setStyleSheet("QWidget { background-color: #f0f0f0; color: #000000; } QPushButton { background-color: #e0e0e0; border: 1px solid #aaa; padding: 6px; }"); s.con.setStyleSheet("font-family:Consolas;font-size:12px;background:#ffffff;color:#000000;")
+
     def save_session(s):
         path, _ = QtWidgets.QFileDialog.getSaveFileName(s, "Сохранить", "project.json", "JSON (*.json)")
         if not path: return
         data = {"gamma": {"geom": s.gtab.cb_geom.currentText(), "mat": s.gtab.sel_mat, "iso": s.gtab.sel_iso, "R": s.gtab.sp_R.value(), "N": s.gtab.sp_n.value()}, "charged": {"pt": s.ctab.cb_p.currentText(), "mat": s.ctab.sel_mat, "E": s.ctab.sp_E.value()}}
         with open(path, "w", encoding="utf-8") as f: json.dump(data, f, indent=2)
+        
     def load_session(s):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(s, "Загрузить", "", "JSON (*.json)")
         if not path: return
@@ -996,6 +2124,7 @@ class Main(QtWidgets.QMainWindow):
             if "charged" in data:
                 c = data["charged"]; s.ctab.cb_p.setCurrentText(c.get("pt", "протон")); s.ctab.sel_mat = c.get("mat", "вода"); s.ctab.btn_mat.setText(s.ctab.sel_mat); s.ctab.sp_E.setValue(c.get("E", 100))
         except Exception: pass
+
     def _mat_table(s):
         t=QtWidgets.QTableWidget(); t.setColumnCount(5); t.setHorizontalHeaderLabels(["Материал","Z","A","Плотность","mu/rho@1МэВ"])
         names=sorted(P.GAMMA_MATS.keys()); t.setRowCount(len(names))
@@ -1003,37 +2132,110 @@ class Main(QtWidgets.QMainWindow):
             m=P.make_gamma_mat(n)
             for j,v in enumerate([n,f"{m.Z:g}",f"{m.A:g}",f"{m.density:g}",f"{m.mu_rho(1.0):.4g}"]): t.setItem(i,j,QtWidgets.QTableWidgetItem(v))
         t.resizeColumnsToContents(); return t
+
     def closeEvent(s, event):
         for w in [getattr(s.gtab, "w", None), getattr(s.gtab, "w_att", None), getattr(s.ntab, "w", None), getattr(s.ctab, "w_str", None), getattr(s.ctab, "w_lat", None)]:
             if w and hasattr(w, 'isRunning') and w.isRunning():
                 if hasattr(w, 'stop'): w.stop()
                 w.wait(2000)
         event.accept()
-
 def main():
-    app=QtWidgets.QApplication(sys.argv); app.setStyle("Fusion")
+    app = QtWidgets.QApplication(sys.argv)
+    app.setStyle("Fusion")
     
-    # Создаем заставку (Splash Screen)
-    pixmap = QtGui.QPixmap(500, 250)
-    pixmap.fill(QtGui.QColor("#1e1e1e")) # Темный фон
+    # ==========================================
+    # СОЗДАНИЕ СТИЛИЗОВАННОЙ ЗАСТАВКИ (800x450)
+    # ==========================================
+    W, H = 800, 450
+    pixmap = QtGui.QPixmap(W, H)
+    pixmap.fill(QtGui.QColor("#0a0a0c")) # Глубокий черный фон
+    
     painter = QtGui.QPainter(pixmap)
+    painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
     
-    # Рисуем текст на заставке
-    painter.setPen(QtGui.QColor("#2e7d32"))
-    painter.setFont(QtGui.QFont("Consolas", 28, QtGui.QFont.Bold))
-    painter.drawText(pixmap.rect(), QtCore.Qt.AlignmentFlag.AlignCenter, "PROMETHEUS CORE")
+    # 1. Радиальный градиент (эффект свечения из центра)
+    gradient = QtGui.QRadialGradient(W/2, H/2, W/2)
+    gradient.setColorAt(0.0, QtGui.QColor("#102b2b")) # Темно-изумрудный центр
+    gradient.setColorAt(1.0, QtGui.QColor("#0a0a0c")) # Черные края
+    painter.fillRect(0, 0, W, H, gradient)
     
-    painter.setPen(QtGui.QColor("#d4d4d4"))
-    painter.setFont(QtGui.QFont("Consolas", 12))
-    painter.drawText(pixmap.rect().adjusted(0, 60, 0, 0), QtCore.Qt.AlignmentFlag.AlignCenter, "Инициализация JIT-компилятора...")
+    # 2. Декоративная сетка на фоне
+    painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 10), 1)) # Еле заметный белый
+    for i in range(0, W, 40): painter.drawLine(i, 0, i, H)
+    for i in range(0, H, 40): painter.drawLine(0, i, W, i)
+    
+    # 3. Стилизованный атом (орбиты и ядро)
+    center_x, center_y = W // 2, H // 2 - 20
+    
+    # Ядро (с эффектом свечения)
+    for r, alpha in [(30, 20), (20, 50), (10, 255)]:
+        painter.setBrush(QtGui.QColor(0, 255, 204, alpha))
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.drawEllipse(center_x - r, center_y - r, r*2, r*2)
+        
+    # Орбиты
+    painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+    for angle in [0, 60, 120]:
+        painter.save()
+        painter.translate(center_x, center_y)
+        painter.rotate(angle)
+        painter.setPen(QtGui.QPen(QtGui.QColor(0, 255, 204, 120), 2))
+        painter.drawEllipse(-160, -50, 320, 100) # Сплюснутый эллипс
+        painter.restore()
+        
+    # 4. Текст (Заголовок)
+    font_title = QtGui.QFont("Segoe UI", 42, QtGui.QFont.Weight.Bold)
+    painter.setFont(font_title)
+    
+    # Рисуем тень/свечение для текста несколько раз
+    painter.setPen(QtGui.QColor(0, 255, 204, 40))
+    painter.drawText(pixmap.rect().adjusted(0, -120, 0, 0), QtCore.Qt.AlignmentFlag.AlignCenter, "PROMETHEUS CORE")
+    painter.setPen(QtGui.QColor(0, 255, 204, 80))
+    painter.drawText(pixmap.rect().adjusted(0, -120, 0, 0), QtCore.Qt.AlignmentFlag.AlignCenter, "PROMETHEUS CORE")
+    
+    # Основной текст
+    painter.setPen(QtGui.QColor("#ffffff"))
+    painter.drawText(pixmap.rect().adjusted(0, -120, 0, 0), QtCore.Qt.AlignmentFlag.AlignCenter, "PROMETHEUS CORE")
+    
+    # 5. Подзаголовок
+    font_sub = QtGui.QFont("Consolas", 14)
+    painter.setFont(font_sub)
+    painter.setPen(QtGui.QColor("#4CAF50"))
+    painter.drawText(pixmap.rect().adjusted(0, -40, 0, 0), QtCore.Qt.AlignmentFlag.AlignCenter, "NUCLEAR & RADIATION SIMULATION ENGINE")
+    
+    # 6. Декоративные линии по бокам от подзаголовка
+    painter.setPen(QtGui.QPen(QtGui.QColor("#4CAF50"), 1))
+    painter.drawLine(W//2 - 250, H//2 + 25, W//2 - 150, H//2 + 25)
+    painter.drawLine(W//2 + 150, H//2 + 25, W//2 + 250, H//2 + 25)
+    
+    # 7. Статус загрузки внизу
+    font_status = QtGui.QFont("Consolas", 10)
+    painter.setFont(font_status)
+    painter.setPen(QtGui.QColor("#888888"))
+    painter.drawText(pixmap.rect().adjusted(0, 120, 0, 0), QtCore.Qt.AlignmentFlag.AlignCenter, "Версия 5.0.0 (Dev)")
+    
+    # Полоса загрузки (декоративная)
+    painter.setPen(QtGui.QPen(QtGui.QColor("#2e7d32"), 2))
+    painter.setBrush(QtGui.QColor("#1e1e1e"))
+    painter.drawRect(W//2 - 150, H//2 + 140, 300, 6)
+    
+    # Заполненная часть полосы (имитация)
+    painter.setPen(QtCore.Qt.PenStyle.NoPen)
+    painter.setBrush(QtGui.QColor("#00ffcc"))
+    painter.drawRect(W//2 - 148, H//2 + 142, 220, 2) # Заполнено на ~70%
+    
+    painter.setPen(QtGui.QColor("#4CAF50"))
+    painter.drawText(pixmap.rect().adjusted(0, 180, 0, 0), QtCore.Qt.AlignmentFlag.AlignCenter, "Инициализация физического ядра...")
+    
     painter.end()
+    # ==========================================
 
-    # Показываем заставку
-    splash = QtWidgets.QSplashScreen(pixmap)
+    # Показываем заставку (поверх всех окон)
+    splash = QtWidgets.QSplashScreen(pixmap, QtCore.Qt.WindowStaysOnTopHint)
     splash.show()
-    app.processEvents() # Принудительно отрисовываем заставку
+    app.processEvents() # Принудительно отрисовываем, чтобы не было задержек
     
-    # Применяем стили
+    # Применяем стили к приложению
     app.setStyleSheet("""
         QComboBox { background-color: #2b2b2b; color: #ffffff; border: 1px solid #555555; border-radius: 4px; padding: 4px 8px; }
         QComboBox:hover { border: 1px solid #2e7d32; }
@@ -1042,13 +2244,21 @@ def main():
         QHeaderView::section { background-color: #1e1e1e; color: #ffffff; padding: 4px; border: 1px solid #444444; }
         QToolTip { background-color: #2b2b2b; color: #ffffff; border: 1px solid #2e7d32; }
     """)
-    
+
+    # Создаем главное окно в фоне
+    global w
     w = Main()
-    w.showMaximized()
-    splash.finish(w) # Закрываем заставку, когда главное окно готово
+
+    # Функция отложенного запуска
+    def show_main_window():
+        w.showMaximized()
+        splash.finish(w)
+
+    # Ждем ровно 2.5 секунды (2500 мс) для красивого эффекта
+    QtCore.QTimer.singleShot(2500, show_main_window)
     
     sys.exit(app.exec())
-
+    
 if __name__=="__main__":
     mp.freeze_support()
     main()
