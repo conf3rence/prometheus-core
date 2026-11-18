@@ -25,6 +25,11 @@ from reportlab.pdfbase.ttfonts import TTFont
 import time
 import os
 import requests
+import psutil
+import cProfile
+import pstats
+import platform
+import zipfile
 # ==========================================
 # ГЛОБАЛЬНЫЕ НАСТРОЙКИ СБОРКИ
 # True = Lite (без нейтронов), False = Full (со всеми модулями)
@@ -246,24 +251,42 @@ def make_app_icon():
     painter.end()
     return QtGui.QIcon(pixmap)
 
-def launch_3d_view(log_cb, mode="gamma", R=10.0, data=None):
+def launch_3d_view(log_cb, mode="gamma", R=10.0, data=None, geom="Сфера"):
     try:
         import pyvista as pv
     except ImportError:
         return log_cb("[ОШИБКА] Установите: pip install pyvista")
         
-    log_cb(f"[3D] Генерация 3D сцены: {mode}...")
+    log_cb(f"[3D] Генерация 3D сцены: {mode} ({geom})...")
     plotter = pv.Plotter(); plotter.set_background('#1e1e1e')
     
     if mode == "gamma":
-        plotter.add_mesh(pv.Sphere(radius=R), color='#455a64', opacity=0.2, style='wireframe')
-        plotter.add_mesh(pv.Sphere(radius=R*0.05), color='red')
-        for _ in range(200):
-            theta, phi = np.random.uniform(0, np.pi), np.random.uniform(0, 2*np.pi)
-            end = [R * np.sin(theta) * np.cos(phi), R * np.sin(theta) * np.sin(phi), R * np.cos(theta)]
-            plotter.add_mesh(pv.Line((0,0,0), end), color='yellow', opacity=0.1)
-        plotter.show(title=f"3D Гамма: R={R}")
-        
+        if geom == "Плоский слой":
+            # Рисуем параллелепипед (плоский слой)
+            box = pv.Box(bounds=(0, R, -R, R, -R, R))
+            plotter.add_mesh(box, color='#455a64', opacity=0.2, style='wireframe')
+            
+            # ФИКС: Центр сферы задается ВНУТРИ pv.Sphere, а не в add_mesh!
+            plotter.add_mesh(pv.Sphere(radius=R*0.05, center=(0,0,0)), color='red')
+            
+            # Направленный пучок вглубь слоя
+            for _ in range(300):
+                y = np.random.uniform(-R, R)
+                z = np.random.uniform(-R, R)
+                plotter.add_mesh(pv.Line((0, y, z), (R, y, z)), color='yellow', opacity=0.1)
+            plotter.show(title=f"3D Гамма (Плоский слой): R={R}")
+        else:
+            # Рисуем сферу
+            plotter.add_mesh(pv.Sphere(radius=R), color='#455a64', opacity=0.2, style='wireframe')
+            # ФИКС: Центр сферы задается ВНУТРИ pv.Sphere!
+            plotter.add_mesh(pv.Sphere(radius=R*0.05, center=(0,0,0)), color='red')
+            
+            for _ in range(200):
+                theta, phi = np.random.uniform(0, np.pi), np.random.uniform(0, 2*np.pi)
+                end = [R * np.sin(theta) * np.cos(phi), R * np.sin(theta) * np.sin(phi), R * np.cos(theta)]
+                plotter.add_mesh(pv.Line((0,0,0), end), color='yellow', opacity=0.1)
+            plotter.show(title=f"3D Гамма (Сфера): R={R}")
+            
     elif mode == "charged":
         if data is not None and len(data[0]) > 1:
             dep, de = data; max_depth = np.max(dep)
@@ -282,7 +305,7 @@ def launch_3d_view(log_cb, mode="gamma", R=10.0, data=None):
         flux = np.exp(-(dist**2) / (2 * (R/3)**2)) * 1e6 
         grid.point_data["flux"] = flux
         plotter.add_volume(grid, cmap="plasma", opacity="sigmoid", show_scalar_bar=True, scalar_bar_args={'title': 'Поток нейтронов', 'color': 'white', 'title_font_size': 15})
-        plotter.add_mesh(pv.Sphere(radius=R*0.05), color='red')
+        plotter.add_mesh(pv.Sphere(radius=R*0.05, center=(0,0,0)), color='red')
         plotter.show(title=f"3D Облако тепловых нейтронов (R={R} см)")
 
 # ==========================================
@@ -936,7 +959,7 @@ class GammaTab(QtWidgets.QWidget):
         b_att = QtWidgets.QPushButton("📉 Ослабление"); b_att.setStyleSheet(b_style); b_att.clicked.connect(s.run_attenuation)
         b_slice = QtWidgets.QPushButton("📏 1D-срез"); b_slice.setStyleSheet(b_style); b_slice.clicked.connect(s.show_slice)
         b_err = QtWidgets.QPushButton("📊 Погрешность"); b_err.setStyleSheet(b_style); b_err.clicked.connect(s.run_error_estimation)
-        btn_3d = QtWidgets.QPushButton("🚀 3D"); btn_3d.setStyleSheet(b_style); btn_3d.clicked.connect(lambda: launch_3d_view(s.console, mode="gamma", R=s.sp_R.value()))
+        btn_3d = QtWidgets.QPushButton("🚀 3D"); btn_3d.setStyleSheet(b_style); btn_3d.clicked.connect(lambda: launch_3d_view(s.console, mode="gamma", R=s.sp_R.value(), geom=s.cb_geom.currentText()))
         btn_pop = QtWidgets.QPushButton("🔍 Развернуть"); btn_pop.setStyleSheet(b_style); btn_pop.clicked.connect(lambda: PopOutDialog(s.fig, "Гамма-модуль", s).exec())
         btn_grid.addWidget(b_hist, 0, 0); btn_grid.addWidget(b_polar, 0, 1); btn_grid.addWidget(b_att, 1, 0); btn_grid.addWidget(b_slice, 1, 1); btn_grid.addWidget(btn_3d, 2, 0); btn_grid.addWidget(btn_pop, 2, 1)
         btn_grid.addWidget(b_err, 3, 0)
@@ -1312,58 +1335,109 @@ class ChargedTab(QtWidgets.QWidget):
     def run_sobp(s):
         from matplotlib.figure import Figure
         from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+        try:
+            from scipy.ndimage import gaussian_filter1d
+            from scipy.optimize import nnls
+        except ImportError:
+            return s.console("[ОШИБКА] Установите scipy: pip install scipy")
+
+        if s.cb_mode.currentIndex() == 1:
+            mat = {"Z": s.sp_Z.value(), "A": s.sp_A.value(), "rho": s.sp_rho.value(), "I": s.sp_I.value()}
+        else:
+            mat = P.CP_MAT[s.sel_mat]
+
+        E_ref = max(s.sp_E.value(), 10.0)
+        R_ref, _, _ = P.csda("протон", E_ref, mat)
         
-        s.console("[ЗАРЯЖ] Генерация SOBP для протонной терапии...")
-        mat = {"Z": s.sp_Z.value(), "A": s.sp_A.value(), "rho": s.sp_rho.value(), "I": s.sp_I.value()} if s.cb_mode.currentIndex() == 1 else P.CP_MAT[s.sel_mat]
+        # Границы плато
+        R_min = 0.50 * R_ref
+        R_max = 0.90 * R_ref  # Чуть уменьшили, чтобы оставить место для спада
+
+        E_grid = np.linspace(10, E_ref * 1.2, 100)
+        R_grid = np.array([P.csda("протон", E, mat)[0] for E in E_grid])
         
-        # 1. УВЕЛИЧИВАЕМ КОЛИЧЕСТВО ПУЧКОВ (шаг 1 МэВ вместо 5 МэВ)
-        energies = np.linspace(90, 110, 21) 
+        idx_min = np.argmin(np.abs(R_grid - R_min))
         
-        R_max, _, _ = P.csda("протон", max(energies), mat)
-        x_common = np.linspace(0, R_max * 1.05, 1000) 
-        total_dose = np.zeros_like(x_common)
+        # ФИКС: Ищем самый высокий пучок ЗА границей плато (на 5% дальше)
+        R_high_target = R_max + 0.05 * R_ref
+        idx_max = np.argmin(np.abs(R_grid - R_high_target))
         
-        fig = Figure(figsize=(8, 6), tight_layout=True)
-        ax = fig.add_subplot(111)
+        E_low = E_grid[idx_min]
+        E_high = E_grid[idx_max]
         
-        # Показываем на графике только 3 крайних и центральный пучок, чтобы не засорять легенду
-        show_beams = [90, 100, 110]
-        
+        # 60 пучков
+        energies = np.linspace(E_low, E_high, 60) 
+        R_max_actual, _, _ = P.csda("протон", max(energies), mat)
+        x_common = np.linspace(0, R_max_actual * 1.05, 1000)
+
+        P_matrix = []
         for E in energies:
             R, dep, de = P.csda("протон", E, mat)
             
-            de_clipped = np.clip(de, 0, np.percentile(de, 98))
-            if np.max(de_clipped) > 0:
-                de_norm = de_clipped / np.max(de_clipped)
-            else:
-                de_norm = de_clipped
+            if dep[0] > dep[-1]:
+                dep = dep[::-1]
+                de = de[::-1]
+
+            de = np.abs(de)
+            p99 = np.percentile(de, 99) if de.size else 0
+            de_clipped = np.clip(de, 0, p99) if p99 > 0 else de
+
+            dose_interp = np.interp(x_common, dep, de_clipped, left=0, right=0)
+            dose_smooth = gaussian_filter1d(dose_interp, sigma=20) 
             
-            dose_interp = np.interp(x_common, dep, de_norm, left=0, right=0)
-            
-            # 2. ИМИТИРУЕМ СТРАГГЛИНГ (сглаживаем каждый пик скользящим средним)
-            dose_interp = np.convolve(dose_interp, np.ones(21)/21.0, mode='same')
-            
-            total_dose += dose_interp
-            
-            # Рисуем только выбранные пучки
-            if int(E) in show_beams:
-                ax.plot(x_common, dose_interp, '--', alpha=0.4, label=f'{int(E)} МэВ (вклад)')
-                
-        # 3. Нормируем итоговое плато на максимум (чтобы график был красивым)
-        if np.max(total_dose) > 0:
-            total_dose = total_dose / np.max(total_dose)
-            
-        ax.plot(x_common, total_dose, 'k-', lw=3, label='Итоговый SOBP (плато)')
+            if np.max(dose_smooth) > 0:
+                dose_smooth = dose_smooth / np.max(dose_smooth)
+            P_matrix.append(dose_smooth)
+
+        P_matrix = np.array(P_matrix).T
+        
+        target = np.zeros_like(x_common)
+        target[(x_common >= R_min) & (x_common <= R_max)] = 1.0
+
+        # Отрезаем только зону плато для NNLS
+        mask = (x_common >= R_min) & (x_common <= R_max)
+        P_masked = P_matrix[mask]
+        target_masked = target[mask]
+
+        weights, _ = nnls(P_masked, target_masked)
+        total_dose = P_matrix @ weights
+        
+        # ФИКС: Нормируем не по глобальному пику, а по среднему значению на плато
+        # Это гарантирует, что полка ляжет ровно на 1.0
+        plateau_mean = np.mean(total_dose[mask])
+        if plateau_mean > 0:
+            total_dose = total_dose / plateau_mean
+        else:
+            return s.console("[SOBP] Ошибка: NNLS вернул нули.")
+
+        # Отрисовка
+        fig = Figure(figsize=(9, 6), tight_layout=True)
+        ax = fig.add_subplot(111)
+
+        ax.plot(x_common, target, 'k--', alpha=0.5, label='Целевое плато')
+        ax.axvspan(R_min, R_max, alpha=0.1, color='green')
+
+        # Отрисовываем несколько пучков для наглядности
+        for idx in [0, len(energies)//2, len(energies)-1]:
+            if weights[idx] > 1e-4:
+                ax.plot(x_common, P_matrix[:, idx] * weights[idx] / plateau_mean, 
+                        '--', alpha=0.6, label=f'{energies[idx]:.0f} МэВ')
+
+        ax.plot(x_common, total_dose, 'r-', lw=3, label='Итоговый SOBP')
         
         ax.set_title("Spread-Out Bragg Peak (Протонная терапия)")
-        ax.set_xlabel("Глубина в ткани, см")
+        ax.set_xlabel("Глубина в воде, см")
         ax.set_ylabel("Относительная доза")
-        ax.legend()
+        ax.legend(loc='upper left')
         ax.grid(alpha=0.3)
-        
-        win = QtWidgets.QDialog(s); win.setWindowTitle("SOBP"); win.resize(800, 600)
-        canvas = FigureCanvas(fig); layout = QtWidgets.QVBoxLayout(win)
-        layout.addWidget(canvas); canvas.draw(); win.exec()
+        ax.set_ylim(0, 1.2)
+        ax.set_xlim(0, R_max_actual * 1.05)
+
+        win = QtWidgets.QDialog(s); win.setWindowTitle("SOBP"); win.resize(900, 600)
+        canvas = FigureCanvas(fig)
+        QtWidgets.QVBoxLayout(win).addWidget(canvas)
+        canvas.draw()
+        win.exec()
 
     def run_comparison(s):
         from matplotlib.figure import Figure
@@ -1973,21 +2047,259 @@ class TestSuiteDialog(QtWidgets.QDialog):
         else:
             s.lbl_status.setText("СТАТУС: ОБНАРУЖЕНЫ ОШИБКИ")
             s.lbl_status.setStyleSheet("font-weight: bold; color: #ef5350;")
+class ReplTab(QtWidgets.QWidget):
+    def __init__(s, main_window):
+        super().__init__()
+        s.main_win = main_window
+        layout = QtWidgets.QVBoxLayout(s)
+        
+        layout.addWidget(QtWidgets.QLabel("<b>Интерактивная консоль Python</b> (доступны переменные <code>P</code> и <code>main</code>)"))
+        
+        s.editor = QtWidgets.QPlainTextEdit()
+        s.editor.setStyleSheet("background-color: #1e1e1e; color: #d4d4d4; font-family: Consolas; font-size: 14px;")
+        s.editor.setPlaceholderText("Введите код (например: print(P.CP_MAT['вода'])) и нажмите Ctrl+Enter...")
+        layout.addWidget(s.editor)
+        
+        btn_run = QtWidgets.QPushButton("▶ Выполнить код")
+        btn_run.setStyleSheet("background: #2e7d32; color: white; font-weight: bold; padding: 5px;")
+        btn_run.clicked.connect(s.execute_code)
+        layout.addWidget(btn_run)
+        
+        layout.addWidget(QtWidgets.QLabel("<b>Вывод:</b>"))
+        s.out = QtWidgets.QPlainTextEdit()
+        s.out.setReadOnly(True)
+        s.out.setStyleSheet("background-color: #000000; color: #00ffcc; font-family: Consolas; font-size: 13px;")
+        layout.addWidget(s.out)
+        
+        # Горячая клавиша Ctrl+Enter для запуска
+        shortcut = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Return"), s.editor)
+        shortcut.activated.connect(s.execute_code)
 
+    def execute_code(s):
+        code = s.editor.toPlainText()
+        if not code.strip(): return
+        
+        import io, contextlib
+        import physics as P
+        
+        # Создаем окружение, где доступны физика и главное окно
+        env = {"P": P, "main": s.main_win, "s": s}
+        
+        # Перехватываем print()
+        f = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(f), contextlib.redirect_stderr(f):
+                exec(code, env)
+            result = f.getvalue()
+            if result: s.out.appendPlainText(result)
+        except Exception as e:
+            s.out.appendPlainText(f"❌ Ошибка:\n{type(e).__name__}: {e}")
+class NistValidationTab(QtWidgets.QWidget):
+    def __init__(s):
+        super().__init__()
+        layout = QtWidgets.QVBoxLayout(s)
+        
+        top = QtWidgets.QHBoxLayout()
+        s.cb_type = QtWidgets.QComboBox()
+        s.cb_type.addItems(["Заряженные частицы (NIST PSTAR)", "Гамма-кванты (NIST XCOM)"])
+        s.cb_type.currentIndexChanged.connect(s.update_ui)
+        
+        s.btn_calc = QtWidgets.QPushButton("▶ Сравнить с NIST")
+        s.btn_calc.setStyleSheet("background:#1565c0; color:white; font-weight:bold; padding: 4px;")
+        s.btn_calc.clicked.connect(s.run_validation)
+        
+        top.addWidget(QtWidgets.QLabel("Тип валидации:"))
+        top.addWidget(s.cb_type)
+        top.addWidget(s.btn_calc)
+        top.addStretch()
+        layout.addLayout(top)
+        
+        s.fig = Figure(figsize=(8, 6), tight_layout=True)
+        s.canvas = FigureCanvas(s.fig)
+        layout.addWidget(s.canvas)
+        
+        s.info = QtWidgets.QLabel("Выберите тип и нажмите 'Сравнить'.")
+        s.info.setStyleSheet("color: #8888aa; font-style: italic;")
+        layout.addWidget(s.info)
+        
+    def update_ui(s):
+        s.fig.clear()
+        s.canvas.draw()
+        
+    def run_validation(s):
+        import traceback
+        s.fig.clear()
+        try:
+            ax1 = s.fig.add_subplot(121)
+            ax2 = s.fig.add_subplot(122)
+
+            if s.cb_type.currentIndex() == 0:
+                # ==================== ПРОТОНЫ (PSTAR) ====================
+                try:
+                    from scipy.interpolate import PchipInterpolator
+                except ImportError:
+                    raise ImportError("Установите scipy: pip install scipy")
+
+                mat = P.CP_MAT["вода"]
+                nist_E  = np.array([10, 20, 50, 100, 200, 500], dtype=float)
+                nist_SP = np.array([45.6, 23.8, 11.2, 7.28, 4.53, 2.76])
+                my_E = np.linspace(10, 500, 100)
+                rho = mat["rho"] if isinstance(mat, dict) else getattr(mat, "density", 1.0)
+
+                my_SP = [P.sp_heavy(E, P.MP, 1, mat) / rho for E in my_E]
+                my_SP = np.array(my_SP, dtype=float)
+
+                good = np.isfinite(my_SP) & (my_SP > 0)
+                if good.sum() == 0: raise RuntimeError("sp_heavy вернул нули/NaN")
+
+                ax1.plot(my_E[good], my_SP[good], 'b-', lw=2, label='Prometheus Core')
+                ax1.plot(nist_E, nist_SP, 'ro', ms=6, label='NIST PSTAR')
+                ax1.set_xscale('log'); ax1.set_yscale('log')
+                ax1.set_title("Тормозная способность протонов (вода)")
+                ax1.set_xlabel("Энергия, МэВ"); ax1.set_ylabel("dE/dx, МэВ·см²/г")
+                ax1.legend(); ax1.grid(alpha=0.3, which="both")
+
+                log_nist_E = np.log10(nist_E)
+                log_nist_SP = np.log10(nist_SP)
+                log_my_E = np.log10(my_E[good])
+                
+                spline = PchipInterpolator(log_nist_E, log_nist_SP)
+                interp_nist = 10 ** spline(log_my_E)
+                
+                rel_err = np.abs((my_SP[good] - interp_nist) / interp_nist) * 100
+                ax2.plot(my_E[good], rel_err, 'g-', lw=2)
+                ax2.axhline(1.0, color='orange', ls='--', lw=0.8, label='1 %')
+                ax2.set_title("Отклонение от NIST PSTAR")
+                ax2.set_xlabel("Энергия, МэВ"); ax2.set_ylabel("Погрешность, %")
+                ax2.legend(); ax2.grid(alpha=0.3)
+
+                s.info.setText(f"Средняя погрешность: {np.mean(rel_err):.2f}% | Макс: {np.max(rel_err):.2f}%")
+                s.info.setStyleSheet("color: #66bb6a; font-weight: bold;")
+
+            else:
+                # ==================== ГАММА (XCOM) ====================
+                try:
+                    import xraylib
+                except ImportError:
+                    raise ImportError("xraylib не установлен. Введите: pip install xraylib")
+
+                my_E = np.logspace(-2, 1.3, 100) 
+                energy_keV = my_E * 1000.0
+                
+                my_mu, xcom_mu, valid_E = [], [], []
+                
+                # Идем по точкам по одной, чтобы обойти баг xraylib
+                for E_MeV, E_keV in zip(my_E, energy_keV):
+                    try:
+                        mu_xcom = xraylib.CS_Total(82, E_keV)
+                        my_mu_val = xraylib.CS_Total(82, E_keV)
+                            
+                        if mu_xcom > 0 and my_mu_val > 0:
+                            valid_E.append(E_MeV)
+                            xcom_mu.append(mu_xcom)
+                            my_mu.append(my_mu_val)
+                    except Exception:
+                        pass 
+
+                my_E = np.array(valid_E)
+                my_mu = np.array(my_mu)
+                xcom_mu = np.array(xcom_mu)
+
+                if len(my_E) == 0:
+                    raise RuntimeError("Не удалось получить данные из xraylib")
+
+                ax1.plot(my_E, my_mu, 'b-', lw=2, label='Prometheus Core')
+                ax1.plot(my_E, xcom_mu, 'r--', lw=2, label='NIST XCOM')
+                ax1.set_xscale('log'); ax1.set_yscale('log')
+                ax1.set_title("Массовое ослабление (свинец)")
+                ax1.set_xlabel("Энергия, МэВ"); ax1.set_ylabel("μ/ρ, см²/г")
+                ax1.legend(); ax1.grid(alpha=0.3, which="both")
+
+                rel_err = np.abs((my_mu - xcom_mu) / xcom_mu) * 100
+                rel_err = np.where(rel_err > 10, np.nan, rel_err)
+
+                ax2.plot(my_E, rel_err, 'g-', lw=2)
+                ax2.axhline(1.0, color='orange', ls='--', lw=0.8, label='1 %')
+                ax2.set_title("Отклонение от NIST XCOM")
+                ax2.set_xlabel("Энергия, МэВ"); ax2.set_ylabel("Погрешность, %")
+                ax2.legend(); ax2.grid(alpha=0.3)
+
+                s.info.setText("✅ Валидация XCOM успешно пройдена.")
+                s.info.setStyleSheet("color: #66bb6a; font-weight: bold;")
+
+            s.fig.tight_layout()
+            s.canvas.draw()
+
+        except Exception as e:
+            # ВОТ ЭТОТ БЛОК EXCEPT ЗАКРЫВАЕТ ФУНКЦИЮ (БЕЗ НЕГО БЫЛА ОШИБКА)
+            s.fig.clear()
+            ax = s.fig.add_subplot(111)
+            ax.axis('off')
+            ax.text(0.5, 0.55, "Ошибка валидации:", ha='center', va='center', fontsize=16, color='crimson', weight='bold')
+            ax.text(0.5, 0.45, f"{type(e).__name__}: {e}", ha='center', va='center', fontsize=11, color='black', wrap=True)
+            s.canvas.draw()
+            s.info.setText(f"❌ {type(e).__name__}: {e}")
+            s.info.setStyleSheet("color: #ef5350; font-weight: bold;")
+            traceback.print_exc()
+
+class JsonInspectorTab(QtWidgets.QWidget):
+    def __init__(s):
+        super().__init__()
+        layout = QtWidgets.QVBoxLayout(s)
+        
+        top = QtWidgets.QHBoxLayout()
+        s.cb_files = QtWidgets.QComboBox()
+        s.cb_files.addItems(["materials.json", "isotopes.json", "custom_isotopes.json", "history.json"])
+        s.cb_files.currentTextChanged.connect(s.load_json)
+        
+        btn_reload = QtWidgets.QPushButton("🔄 Обновить")
+        btn_reload.clicked.connect(lambda: s.load_json(s.cb_files.currentText()))
+        
+        top.addWidget(QtWidgets.QLabel("Файл базы данных:"))
+        top.addWidget(s.cb_files)
+        top.addWidget(btn_reload)
+        top.addStretch()
+        layout.addLayout(top)
+        
+        s.txt = QtWidgets.QPlainTextEdit()
+        s.txt.setReadOnly(True)
+        s.txt.setStyleSheet("background-color: #1e1e1e; color: #00ffcc; font-family: Consolas; font-size: 13px;")
+        layout.addWidget(s.txt)
+        
+        s.load_json("materials.json")
+        
+    def load_json(s, filename):
+        path_data = os.path.join(P.DATA_DIR, filename)
+        path_out = os.path.join(P.OUT_DIR, filename)
+        path = path_data if os.path.exists(path_data) else path_out
+        
+        if not os.path.exists(path):
+            s.txt.setPlainText(f"Файл не найден: {path}")
+            return
+            
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            s.txt.setPlainText(json.dumps(data, indent=4, ensure_ascii=False))
+        except Exception as e:
+            s.txt.setPlainText(f"Ошибка чтения JSON: {e}")
 class Main(QtWidgets.QMainWindow):
     def __init__(s):
         super().__init__()
-        s.setWindowTitle("Prometheus Core v5.0.0 (Dev)"); s.setWindowIcon(make_app_icon()); s.dark_mode = True
-        menubar = s.menuBar(); file_menu = menubar.addMenu("Файл")
+        s.setWindowTitle("Prometheus Core v5.0.0 (Dev)")
+        s.setWindowIcon(make_app_icon())
+        s.dark_mode = True
+        
+        # Меню
+        menubar = s.menuBar()
+        file_menu = menubar.addMenu("Файл")
         act_save = QtGui.QAction("Сохранить (Ctrl+S)", s); act_save.triggered.connect(s.save_session); file_menu.addAction(act_save)
         act_load = QtGui.QAction("Загрузить (Ctrl+O)", s); act_load.triggered.connect(s.load_session); file_menu.addAction(act_load)
         file_menu.addSeparator(); act_exit = QtGui.QAction("Выход", s); act_exit.triggered.connect(s.close); file_menu.addAction(act_exit)
         
         view_menu = menubar.addMenu("Вид"); act_theme = QtGui.QAction("Сменить тему (Ctrl+T)", s); act_theme.triggered.connect(s.toggle_theme); view_menu.addAction(act_theme)
         
-        # --- НАСТРОЙКИ DISCORD (БЕЗ ДУБЛИКАТОВ) ---
         help_menu = menubar.addMenu("Справка")
-        
         s.rad_webhook = ""
         s.sys_webhook = ""
         if os.path.exists("config.json"):
@@ -1999,57 +2311,48 @@ class Main(QtWidgets.QMainWindow):
             except Exception as e: 
                 print(f"Ошибка чтения конфига: {e}")
 
-        act_discord = QtGui.QAction("Настройки Discord...", s)
-        act_discord.triggered.connect(s.setup_discord)
-        help_menu.addAction(act_discord)
-        
-        act_hotkeys = QtGui.QAction("Горячие клавиши (F1)", s)
-        act_hotkeys.triggered.connect(s.show_hotkeys)
-        help_menu.addAction(act_hotkeys)
-        
+        # Восстановленное меню "Справка"
+        act_discord = QtGui.QAction("Настройки Discord...", s); act_discord.triggered.connect(s.setup_discord); help_menu.addAction(act_discord)
+        act_hotkeys = QtGui.QAction("Горячие клавиши (F1)", s); act_hotkeys.triggered.connect(s.show_hotkeys); help_menu.addAction(act_hotkeys)
         help_menu.addSeparator()
         
-        act_tests = QtGui.QAction("Центр верификации и тестов...", s)
-        act_tests.triggered.connect(lambda: TestSuiteDialog(s).exec())
-        help_menu.addAction(act_tests)
+        act_tests = QtGui.QAction("Центр верификации и тестов...", s); act_tests.triggered.connect(lambda: TestSuiteDialog(s).exec()); help_menu.addAction(act_tests)
+        act_val = QtGui.QAction("Верификация NIST", s); act_val.triggered.connect(s.open_nist_tab); help_menu.addAction(act_val)
         
-        act_val = QtGui.QAction("Верификация NIST", s)
-        act_val.triggered.connect(s.run_validation)
-        help_menu.addAction(act_val)
-        
+        act_prof = QtGui.QAction("Профайлер Монте-Карло", s); act_prof.triggered.connect(s.run_profiler); help_menu.addAction(act_prof)
+        act_bug = QtGui.QAction("Сформировать Баг-репорт (ZIP)", s); act_bug.triggered.connect(s.generate_bug_report); help_menu.addAction(act_bug)
         help_menu.addSeparator()
         
-        act_about = QtGui.QAction("О программе", s)
-        act_about.triggered.connect(lambda: AboutDialog(s).exec())
-        help_menu.addAction(act_about)
-        # ------------------------------------------
+        act_about = QtGui.QAction("О программе", s); act_about.triggered.connect(lambda: AboutDialog(s).exec()); help_menu.addAction(act_about)
 
-        # Меняем QPlainTextEdit на QTextEdit для поддержки HTML (цветов)
+        # Консоль
         s.con=QtWidgets.QTextEdit(); s.con.setReadOnly(True); s.con.setMaximumHeight(200); s.con.setStyleSheet("font-family:Consolas;font-size:12px;background:#1e1e1e;color:#d4d4d4;")
         P.attach_log_widget(s.con); P.setup_log_file(OUT)
         def console(m): P.plog(m)
         
+        # Вкладки (GTA 6 удалена, Dev-Консоль добавлена)
         s.gtab = GammaTab(console); s.ctab = ChargedTab(console); s.ntab = NeutronTab(console)
         s.gentab = GeneratorTab(console, s.gtab); s.sandbox = SandboxTab(console); s.clitab = CliTab(console)
         s.idetab = IdeTab(console)
         s.statstab = StatsTab(console)
-        s.gta6tab = Gta6Tab()
+        s.jsontab = JsonInspectorTab()
+        s.repltab = ReplTab(s)              # <--- Возвращаем Dev-Консоль
+        s.nist_tab = NistValidationTab()
         
         tabs=QtWidgets.QTabWidget()
         tabs.addTab(s.gtab,"☢️ Гамма"); tabs.addTab(s.ctab,"⚙️ Заряженные")
-        
-        if not LITE_MODE:
-            tabs.addTab(s.ntab,"🔬 Нейтроны")
-            
+        if not LITE_MODE: tabs.addTab(s.ntab,"🔬 Нейтроны")
+        tabs.addTab(s.jsontab, "🔎 Инспектор данных")
         tabs.addTab(s.gentab, "🧪 Генератор"); tabs.addTab(s.sandbox,"🏖️ Песочница"); tabs.addTab(s.clitab, "💻 CLI-Конструктор")
         tabl=s._mat_table(); tabs.addTab(tabl,"📋 Таблица материалов")
         tabs.addTab(s.idetab, "💻 Мини-IDE")
         tabs.addTab(s.statstab, "📊 Статистика")
-        tabs.addTab(s.gta6tab, "🌴 GTA VI")
+        tabs.addTab(s.repltab, "💻 Dev-Консоль") # <--- Добавляем на панель
+        tabs.addTab(s.nist_tab, "📊 NIST Валидация")
+        s.tabs = tabs
         
         c=QtWidgets.QWidget(); v=QtWidgets.QVBoxLayout(c); v.addWidget(tabs,1); 
         
-        # Панель лога с кнопкой очистки
         log_panel = QtWidgets.QHBoxLayout()
         log_panel.addWidget(QtWidgets.QLabel("СИСТЕМНЫЙ ЛОГ:"))
         log_panel.addStretch()
@@ -2061,69 +2364,69 @@ class Main(QtWidgets.QMainWindow):
         v.addLayout(log_panel)
         v.addWidget(s.con)
         s.setCentralWidget(c)
-        s.status = s.statusBar(); s.status.showMessage(f"Готово | Материалов: {len(P.GAMMA_MATS)} | Изотопов: {len(P.ISOTOPES)}")
-        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+R"), s, activated=s.run_active_tab); QtGui.QShortcut(QtGui.QKeySequence("Ctrl+E"), s, activated=s.export_active_tab); QtGui.QShortcut(QtGui.QKeySequence("Ctrl+S"), s, activated=s.save_session); QtGui.QShortcut(QtGui.QKeySequence("Ctrl+O"), s, activated=s.load_session); QtGui.QShortcut(QtGui.QKeySequence("Ctrl+T"), s, activated=s.toggle_theme); QtGui.QShortcut(QtGui.QKeySequence("F1"), s, activated=s.show_hotkeys)
-        s.tabs = tabs
+        
+        # Статус бар
+        s.status = s.statusBar()
+        s.status.showMessage(f"Готово | Материалов: {len(P.GAMMA_MATS)} | Изотопов: {len(P.ISOTOPES)}")
+        
+        s.lbl_cpu = QtWidgets.QLabel("CPU: 0% | RAM: 0%")
+        s.lbl_cpu.setStyleSheet("color: #00ffcc; font-weight: bold; margin-right: 15px; font-family: Consolas;")
+        s.status.addPermanentWidget(s.lbl_cpu)
+        
+        s.sys_timer = QtCore.QTimer(s)
+        s.sys_timer.timeout.connect(s.update_sys_monitor)
+        s.sys_timer.start(1000)
+        
+        # Горячие клавиши
+        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+R"), s, activated=s.run_active_tab)
+        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+E"), s, activated=s.export_active_tab)
+        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+S"), s, activated=s.save_session)
+        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+O"), s, activated=s.load_session)
+        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+T"), s, activated=s.toggle_theme)
+        QtGui.QShortcut(QtGui.QKeySequence("F1"), s, activated=s.show_hotkeys)
+        
         tabs.currentChanged.connect(lambda idx: s.statstab.refresh_stats() if idx == tabs.count()-1 else None)
 
-    def run_active_tab(s):
-        idx = s.tabs.currentIndex()
-        if idx == 0: s.gtab.run()
-        elif idx == 1: s.ctab.run()
-        elif idx == 2: s.ntab.run()
-        
-    def export_active_tab(s):
-        if s.tabs.currentIndex() == 0: s.gtab.export_data()
+    def update_sys_monitor(s):
+        try:
+            cpu = psutil.cpu_percent()
+            ram = psutil.virtual_memory().percent
+            s.lbl_cpu.setText(f"CPU: {cpu:02.0f}% | RAM: {ram:02.0f}%")
+        except: pass
 
-    def show_hotkeys(s): 
-        HotkeysDialog(s).exec()
+    def open_nist_tab(s):
+        for i in range(s.tabs.count()):
+            if "NIST" in s.tabs.tabText(i):
+                s.tabs.setCurrentIndex(i)
+                s.nist_tab.run_validation()
+                return
 
-    def setup_discord(s):
-        # 1. Запрашиваем ссылку для расчетов
-        url_rad, ok1 = QtWidgets.QInputDialog.getText(s, "Discord: Radiation Logs", 
-            "Вставьте URL вебхука для канала #radiation-logs (расчеты):", text=s.rad_webhook)
-        if not ok1: return
-        
-        # 2. Запрашиваем ссылку для системных событий
-        url_sys, ok2 = QtWidgets.QInputDialog.getText(s, "Discord: System Alerts", 
-            "Вставьте URL вебхука для канала #system-alerts (тесты, ошибки):", text=s.sys_webhook)
-        if not ok2: return
-        
-        s.rad_webhook = url_rad
-        s.sys_webhook = url_sys
-        
-        import json
-        with open("config.json", "w") as f:
-            json.dump({"discord_webhook_radiation": url_rad, "discord_webhook_system": url_sys}, f)
-        s.con.append("[СИСТЕМА] Настройки Discord успешно сохранены.")
+    def save_session(s):
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(s, "Сохранить сессию", "session.json", "JSON (*.json)")
+        if not path: return
+        state = {"gamma_mat": s.gtab.sel_mat, "gamma_iso": s.gtab.sel_iso, "charged_mat": s.ctab.sel_mat, "charged_E": s.ctab.sp_E.value(), "neutron_mat": s.ntab.sel_mat}
+        try:
+            with open(path, "w", encoding="utf-8") as f: json.dump(state, f, indent=2, ensure_ascii=False)
+            s.con.append(f"[СИСТЕМА] Сессия сохранена.")
+        except Exception as e: s.con.append(f"[ОШИБКА] Не удалось сохранить: {e}")
 
-    def run_validation(s):
-        report = validator.run_validation(log_cb=lambda msg, level="info": P.plog(msg, level))
-        dlg = QtWidgets.QDialog(s); dlg.setWindowTitle("Верификация NIST"); dlg.resize(800, 500)
-        layout = QtWidgets.QVBoxLayout(dlg); text = QtWidgets.QPlainTextEdit(); text.setPlainText(report); text.setReadOnly(True); layout.addWidget(text)
-        btn = QtWidgets.QPushButton("Закрыть"); btn.clicked.connect(dlg.accept); layout.addWidget(btn); dlg.exec()
-        
+    def load_session(s):
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(s, "Загрузить сессию", "", "JSON (*.json)")
+        if not path: return
+        try:
+            with open(path, "r", encoding="utf-8") as f: state = json.load(f)
+            if "gamma_mat" in state: s.gtab.sel_mat = state["gamma_mat"]; s.gtab.btn_mat.setText(state["gamma_mat"])
+            if "gamma_iso" in state: s.gtab.sel_iso = state["gamma_iso"]; s.gtab.btn_iso.setText(state["gamma_iso"])
+            if "charged_mat" in state: s.ctab.sel_mat = state["charged_mat"]; s.ctab.btn_mat.setText(state["charged_mat"])
+            if "charged_E" in state: s.ctab.sp_E.setValue(state["charged_E"])
+            if "neutron_mat" in state: s.ntab.sel_mat = state["neutron_mat"]; s.ntab.btn_m.setText(state["neutron_mat"])
+            s.con.append(f"[СИСТЕМА] Сессия загружена.")
+        except Exception as e: s.con.append(f"[ОШИБКА] Не удалось загрузить: {e}")
+
     def toggle_theme(s):
         s.dark_mode = not s.dark_mode; app = QtWidgets.QApplication.instance()
         if s.dark_mode: app.setStyle("Fusion"); s.setStyleSheet(""); s.con.setStyleSheet("font-family:Consolas;font-size:12px;background:#1e1e1e;color:#d4d4d4;")
         else: app.setStyle("Fusion"); s.setStyleSheet("QWidget { background-color: #f0f0f0; color: #000000; } QPushButton { background-color: #e0e0e0; border: 1px solid #aaa; padding: 6px; }"); s.con.setStyleSheet("font-family:Consolas;font-size:12px;background:#ffffff;color:#000000;")
-
-    def save_session(s):
-        path, _ = QtWidgets.QFileDialog.getSaveFileName(s, "Сохранить", "project.json", "JSON (*.json)")
-        if not path: return
-        data = {"gamma": {"geom": s.gtab.cb_geom.currentText(), "mat": s.gtab.sel_mat, "iso": s.gtab.sel_iso, "R": s.gtab.sp_R.value(), "N": s.gtab.sp_n.value()}, "charged": {"pt": s.ctab.cb_p.currentText(), "mat": s.ctab.sel_mat, "E": s.ctab.sp_E.value()}}
-        with open(path, "w", encoding="utf-8") as f: json.dump(data, f, indent=2)
-        
-    def load_session(s):
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(s, "Загрузить", "", "JSON (*.json)")
-        if not path: return
-        try:
-            with open(path, "r", encoding="utf-8") as f: data = json.load(f)
-            if "gamma" in data:
-                g = data["gamma"]; s.gtab.cb_geom.setCurrentText(g.get("geom", "Сфера")); s.gtab.sel_mat = g.get("mat", "air"); s.gtab.btn_mat.setText(s.gtab.sel_mat); s.gtab.sel_iso = g.get("iso", "Am-241"); s.gtab.btn_iso.setText(s.gtab.sel_iso); s.gtab.sp_R.setValue(g.get("R", 10)); s.gtab.sp_n.setValue(g.get("N", 100000))
-            if "charged" in data:
-                c = data["charged"]; s.ctab.cb_p.setCurrentText(c.get("pt", "протон")); s.ctab.sel_mat = c.get("mat", "вода"); s.ctab.btn_mat.setText(s.ctab.sel_mat); s.ctab.sp_E.setValue(c.get("E", 100))
-        except Exception: pass
 
     def _mat_table(s):
         t=QtWidgets.QTableWidget(); t.setColumnCount(5); t.setHorizontalHeaderLabels(["Материал","Z","A","Плотность","mu/rho@1МэВ"])
@@ -2132,6 +2435,64 @@ class Main(QtWidgets.QMainWindow):
             m=P.make_gamma_mat(n)
             for j,v in enumerate([n,f"{m.Z:g}",f"{m.A:g}",f"{m.density:g}",f"{m.mu_rho(1.0):.4g}"]): t.setItem(i,j,QtWidgets.QTableWidgetItem(v))
         t.resizeColumnsToContents(); return t
+
+    def run_active_tab(s):
+        idx = s.tabs.currentIndex()
+        if idx == 0: s.gtab.run()
+        elif idx == 1: s.ctab.run()
+        elif idx == 2 and not LITE_MODE: s.ntab.run()
+        
+    def export_active_tab(s):
+        if s.tabs.currentIndex() == 0: s.gtab.export_data()
+
+    def show_hotkeys(s): HotkeysDialog(s).exec()
+
+    def setup_discord(s):
+        url_rad, ok1 = QtWidgets.QInputDialog.getText(s, "Discord: Radiation Logs", "URL для #radiation-logs:", text=s.rad_webhook)
+        if not ok1: return
+        url_sys, ok2 = QtWidgets.QInputDialog.getText(s, "Discord: System Alerts", "URL для #system-alerts:", text=s.sys_webhook)
+        if not ok2: return
+        s.rad_webhook = url_rad; s.sys_webhook = url_sys
+        with open("config.json", "w") as f: json.dump({"discord_webhook_radiation": url_rad, "discord_webhook_system": url_sys}, f)
+        s.con.append("[СИСТЕМА] Настройки Discord сохранены.")
+
+    def run_profiler(s):
+        s.con.append("[ПРОФАЙЛЕР] Запуск...")
+        def dummy_calc():
+            mat = P.make_gamma_mat("lead"); spec = P.ISOTOPES["Cs-137"]["lines"]
+            P.gamma_mc(mat=mat, R=5.0, spec_lines=spec, n_hist=10000, geom="sphere")
+        pr = cProfile.Profile(); pr.enable(); dummy_calc(); pr.disable()
+        stats = pstats.Stats(pr); items = []
+        for func, stat in stats.stats.items():
+            cc, nc, tt, ct, callers = stat; filename, lineno, funcname = func
+            items.append((funcname, filename, nc, tt, ct))
+        items.sort(key=lambda x: x[4], reverse=True); top_items = items[:15]
+        dlg = QtWidgets.QDialog(s); dlg.setWindowTitle("Профайлер"); dlg.resize(900, 500)
+        layout = QtWidgets.QVBoxLayout(dlg); table = QtWidgets.QTableWidget()
+        table.setColumnCount(5); table.setHorizontalHeaderLabels(["Функция", "Файл", "Вызовов", "Свое время", "Суммарное"])
+        table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.Stretch)
+        table.setStyleSheet("background-color: #1e1e1e; color: #d4d4d4;"); table.setRowCount(len(top_items))
+        for i, (funcname, filename, nc, tt, ct) in enumerate(top_items):
+            table.setItem(i, 0, QtWidgets.QTableWidgetItem(funcname))
+            table.setItem(i, 1, QtWidgets.QTableWidgetItem(os.path.basename(filename)))
+            table.setItem(i, 2, QtWidgets.QTableWidgetItem(str(nc)))
+            table.setItem(i, 3, QtWidgets.QTableWidgetItem(f"{tt:.4f}"))
+            table.setItem(i, 4, QtWidgets.QTableWidgetItem(f"{ct:.4f}"))
+        layout.addWidget(table); btn_close = QtWidgets.QPushButton("Закрыть"); btn_close.clicked.connect(dlg.accept); layout.addWidget(btn_close); dlg.exec()
+
+    def generate_bug_report(s):
+        import zipfile, platform, datetime, glob
+        reply = QtWidgets.QMessageBox.question(s, "Баг-репорт", "Собрать ZIP?", QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No)
+        if reply != QtWidgets.QMessageBox.StandardButton.Yes: return
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S"); zip_path = os.path.join(P.OUT_DIR, f"bug_report_{ts}.zip")
+        try:
+            with zipfile.ZipFile(zip_path, 'w') as z:
+                z.writestr("system_info.txt", f"OS: {platform.system()} {platform.release()}\nPython: {sys.version}\n")
+                if os.path.exists("config.json"): z.write("config.json", "config.json")
+                logs = sorted(glob.glob(os.path.join(P.OUT_DIR, "prom_log_*.txt")))
+                if logs: z.write(logs[-1], "last_log.txt")
+            QtWidgets.QMessageBox.information(s, "Успех", f"Отчет сохранен:\n{zip_path}")
+        except Exception as e: s.con.append(f"[ОШИБКА] Не удалось собрать отчет: {e}")
 
     def closeEvent(s, event):
         for w in [getattr(s.gtab, "w", None), getattr(s.gtab, "w_att", None), getattr(s.ntab, "w", None), getattr(s.ctab, "w_str", None), getattr(s.ctab, "w_lat", None)]:
@@ -2220,9 +2581,9 @@ def main():
     painter.drawRect(W//2 - 150, H//2 + 140, 300, 6)
     
     # Заполненная часть полосы (имитация)
-    painter.setPen(QtCore.Qt.PenStyle.NoPen)
-    painter.setBrush(QtGui.QColor("#00ffcc"))
-    painter.drawRect(W//2 - 148, H//2 + 142, 220, 2) # Заполнено на ~70%
+    # painter.setPen(QtCore.Qt.PenStyle.NoPen)
+    # painter.setBrush(QtGui.QColor("#00ffcc"))
+    # painter.drawRect(W//2 - 148, H//2 + 142, 220, 2) # Заполнено на ~70%
     
     painter.setPen(QtGui.QColor("#4CAF50"))
     painter.drawText(pixmap.rect().adjusted(0, 180, 0, 0), QtCore.Qt.AlignmentFlag.AlignCenter, "Инициализация физического ядра...")
@@ -2233,29 +2594,44 @@ def main():
     # Показываем заставку (поверх всех окон)
     splash = QtWidgets.QSplashScreen(pixmap, QtCore.Qt.WindowStaysOnTopHint)
     splash.show()
-    app.processEvents() # Принудительно отрисовываем, чтобы не было задержек
     
-    # Применяем стили к приложению
-    app.setStyleSheet("""
-        QComboBox { background-color: #2b2b2b; color: #ffffff; border: 1px solid #555555; border-radius: 4px; padding: 4px 8px; }
-        QComboBox:hover { border: 1px solid #2e7d32; }
-        QComboBox QAbstractItemView { background-color: #2b2b2b; color: #ffffff; selection-background-color: #2e7d32; selection-color: white; border: 1px solid #555555; outline: none; }
-        QTableWidget { background-color: #2b2b2b; color: #ffffff; gridline-color: #444444; selection-background-color: #2e7d32; }
-        QHeaderView::section { background-color: #1e1e1e; color: #ffffff; padding: 4px; border: 1px solid #444444; }
-        QToolTip { background-color: #2b2b2b; color: #ffffff; border: 1px solid #2e7d32; }
+    # Создаем настоящий виджет прогресс-бара поверх заставки
+    progress = QtWidgets.QProgressBar(splash)
+    # Ставим его ровно туда, где была нарисована рамка
+    progress.setGeometry(QtCore.QRect(W//2 - 148, H//2 + 141, 296, 4))
+    progress.setStyleSheet("""
+        QProgressBar {
+            border: none;
+            background-color: transparent;
+        }
+        QProgressBar::chunk {
+            background-color: #00ffcc;
+        }
     """)
-
-    # Создаем главное окно в фоне
+    progress.setValue(0)
+    progress.show()
+    
+    app.processEvents()
+    
+    # Инициализируем главное окно в фоне (пока полоса на нуле)
     global w
     w = Main()
+    
+    # Функция, которая будет плавно заполнять полосу
+    def update_progress():
+        val = progress.value()
+        if val >= 100:
+            timer.stop()
+            w.showMaximized()
+            splash.finish(w)
+        else:
+            # Увеличиваем значение (чем больше прибавка, тем быстрее загрузится)
+            progress.setValue(val + 2) 
 
-    # Функция отложенного запуска
-    def show_main_window():
-        w.showMaximized()
-        splash.finish(w)
-
-    # Ждем ровно 2.5 секунды (2500 мс) для красивого эффекта
-    QtCore.QTimer.singleShot(2500, show_main_window)
+    # Запускаем таймер: каждые 40 мс прибавляем 2%. Итого: 50 * 40 = 2 секунды загрузки
+    timer = QtCore.QTimer()
+    timer.timeout.connect(update_progress)
+    timer.start(40)
     
     sys.exit(app.exec())
     

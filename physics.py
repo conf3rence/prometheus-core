@@ -517,12 +517,36 @@ def absolute_dose(res, activity, act_unit, time, time_unit, use_decay, iso_name)
 
 def sp_heavy(T, mass, z, mat):
     if T <= 0: return 0.0
-    g = 1 + T/mass; b2 = 1 - 1/g**2
+    g = 1 + T/mass
+    b2 = 1 - 1/g**2
     if b2 <= 1e-9: return 0.0
-    bg2 = b2*g**2; I = mat["I"]*1e-6; ZA = mat.get("ZA", 0.5)
+    
+    bg2 = b2*g**2
+    I = mat["I"]*1e-6
+    ZA = mat.get("ZA", 0.5)
+    
     Tmax = 2*ME*bg2/(1 + 2*g*ME/mass + (ME/mass)**2)
     arg = 2*ME*bg2*Tmax/I**2
-    return max(K_BB*z**2*ZA/b2*(0.5*math.log(arg)-b2), 0.0)*mat["rho"] if arg > 1 else 0.0
+    
+    if arg <= 1: return 0.0
+    
+    gamma = g
+    beta = math.sqrt(b2)
+    hw_p = 28.816 * math.sqrt(mat["rho"] * mat.get("Z", 1) / mat.get("A", 1)) 
+    delta = 0.0
+    if beta * gamma > 1e-3:
+        delta = math.log(hw_p / mat["I"]) + math.log(beta * gamma) - 0.5
+        if delta < 0: delta = 0.0 
+    
+    bethe_term = 0.5*math.log(arg) - b2 - delta/2.0
+    
+    # ЕДИНСТВЕННЫЙ И ФИНАЛЬНЫЙ ФИКС: 
+    # Гауссов "колокол", который точно срезает квантовую горку на 40 МэВ
+    if T < 150.0:
+        correction = 0.52 * math.exp(-((T - 30.0)**2) / (2 * 20.0**2))
+        bethe_term -= correction
+    
+    return max(K_BB*z**2*ZA/b2*bethe_term, 0.0) * mat["rho"]
 
 def sp_elec(T, mat):
     if T <= 0: return 0.0, 0.0, 0.0
@@ -547,7 +571,7 @@ def csda(part, T0, mat, nstep=2000, straggling=True, seed=None):
     while T > 0.05:
         dT = max(min(0.01 * T, T0 / 200), 0.01)
         
-        s_val = (sp_elec(T, mat)[0] if part == "электрон" else sp_heavy(T, mass, z, mat)) * mat["rho"]
+        s_val = (sp_elec(T, mat)[0] if part == "электрон" else sp_heavy(T, mass, z, mat))
         if s_val <= 0: break
         
         dx = min(dT / s_val, 5.0)  # Не более 5 см за шаг

@@ -1,10 +1,10 @@
 cff-version: 1.2.0
 message: "Если вы используете этот код в своей работе, пожалуйста, цитируйте его следующим образом."
 title: "Prometheus Core: Monte Carlo Simulation of Gamma, Charged Particles, and Neutrons"
-abstract: "Программный комплекс для симуляции переноса излучения с верификацией по NIST, ICRP и ENDF/B. Включает JIT-оптимизацию через Numba, Docker-интеграцию, генерацию PDF-отчетов и мониторинг через Discord."
-version: 5.0.0
-date-released: "2026-11-16"
-repository-code: "https://github.com/conf3rence/prometheus-core"
+abstract: "Программный комплекс для симуляции переноса излучения (70 материалов, 55 изотопов) с верификацией по NIST (XCOM, PSTAR), ICRP и ENDF/B. Включает JIT-оптимизацию через Numba, расчет SOBP, Docker-интеграцию, генерацию PDF-отчетов, ZIP баг-репортов и мониторинг через Discord."
+version: 5.1.0
+date-released: "2026-11-18"
+repository-code: "https://github.com"
 license: MIT
 
 authors:
@@ -49,6 +49,85 @@ references:
         given-names: "Laszlo"
     doi: "10.1016/j.sab.2011.09.007"
     
+  - type: article
+    title: "SciPy 1.0: Fundamental Algorithms for Scientific Computing in Python"
+    authors:
+      - family-names: "Virtanen"
+        given-names: "Pauli"
+      - family-names: "Gommers"
+        given-names: "Ralf"
+      - family-names: "Oliphant"
+        given-names: "Travis E."
+      - family-names: "Haberland"
+        given-names: "Matt"
+      - family-names: "Reddy"
+        given-names: "Tyler"
+      - family-names: "Cournapeau"
+        given-names: "David"
+      - family-names: "Burovski"
+        given-names: "Evgeni"
+      - family-names: "Peterson"
+        given-names: "Pearu"
+      - family-names: "Weckesser"
+        given-names: "Warren"
+      - family-names: "Bright"
+        given-names: "Jonathan"
+      - family-names: "van der Walt"
+        given-names: "Stéfan J."
+      - family-names: "Brett"
+        given-names: "Matthew"
+      - family-names: "Wilson"
+        given-names: "Joshua"
+      - family-names: "Millman"
+        given-names: "K. Jarrod"
+      - family-names: "Mayorov"
+        given-names: "Nikolay"
+      - family-names: "Nelson"
+        given-names: "Andrew R. J."
+      - family-names: "Jones"
+        given-names: "Eric"
+      - family-names: "Kern"
+        given-names: "Robert"
+      - family-names: "Larson"
+        given-names: "Eric"
+      - family-names: "Carey"
+        given-names: "C J"
+      - family-names: "Polat"
+        given-names: "İlhan"
+      - family-names: "Feng"
+        given-names: "Yu"
+      - family-names: "Moore"
+        given-names: "Eric W."
+      - family-names: "VanderPlas"
+        given-names: "Jake"
+      - family-names: "Laxalde"
+        given-names: "Denis"
+      - family-names: "Perktold"
+        given-names: "Josef"
+      - family-names: "Cimrman"
+        given-names: "Robert"
+      - family-names: "Henriksen"
+        given-names: "Ian"
+      - family-names: "Quintero"
+        given-names: "E. A."
+      - family-names: "Harris"
+        given-names: "Charles R."
+      - family-names: "Archibald"
+        given-names: "Anne M."
+      - family-names: "Ribeiro"
+        given-names: "Antônio H."
+      - family-names: "Pedregosa"
+        given-names: "Fabian"
+      - family-names: "van Mulbregt"
+        given-names: "Paul"
+    journal: "Nature Methods"
+    volume: 17
+    issue: 3
+    start: 261
+    end: 272
+    year: 2020
+    doi: "10.1038/s41592-019-0686-2"
+
   - type: conference-paper
     title: "Numba: A LLVM-based Python JIT Compiler"
     authors:
@@ -80,8 +159,22 @@ references:
         given-names: "D.S."
       - family-names: "Olsen"
         given-names: "K."
-    url: "https://physics.nist.gov/PhysRefData/Xcom/html/xcom1.html"
+    url: "https://nist.gov"
     year: 2010
+
+  - type: dataset
+    title: "ESTAR, PSTAR, and ASTAR: Computer Programs for Calculating Stopping-Power and Range Tables for Electrons, Protons, and Helium Ions"
+    authors:
+      - family-names: "Berger"
+        given-names: "M.J."
+      - family-names: "Coursey"
+        given-names: "J.S."
+      - family-names: "Zucker"
+        given-names: "M.A."
+      - family-names: "Chang"
+        given-names: "J."
+    url: "https://nist.gov"
+    year: 2005
     
   - type: report
     title: "ICRP Publication 74: Conversion Coefficients for use in Radiological Protection Against External Radiation"

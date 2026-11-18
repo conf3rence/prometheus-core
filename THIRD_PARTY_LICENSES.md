@@ -27,7 +27,7 @@
 *   **Лицензия:** MIT License.
 
 ## 6. xraylib
-*   **Использование:** Источник парциальных сечений взаимодействия.
+*   **Использование:** Источник парциальных сечений взаимодействия и прямой расчет для высоких энергий.
 *   **Цитирование:** *Tom Schoonjans, et al., "The xraylib library...", Spectrochimica Acta Part B, 66(11), 776-784 (2011).*
 *   **Лицензия:** BSD 3-Clause License.
 
@@ -41,24 +41,33 @@
 
 ## 9. NumPy
 *   **Использование:** Массивы и линейная алгебра.
-*   **Лицензия:** BSD 3-Clause.
+*   **Лицензия:** BSD 3-Clause License.
 
-## 10. Matplotlib
+## 10. SciPy
+*   **Использование:** Оптимизация весов SOBP (`nnls`) и сплайн-интерполяция сечений (`PchipInterpolator`).
+*   **Цитирование:** *Pauli Virtanen, et al., "SciPy 1.0: Fundamental Algorithms for Scientific Computing in Python", Nature Methods, 17(3), 261–272 (2020).*
+*   **Лицензия:** BSD 3-Clause License.
+
+## 11. Matplotlib
 *   **Использование:** Графики и визуализации.
 *   **Лицензия:** PSF-based (BSD-совместимая).
 
-## 11. PyVista / VTK
+## 12. PyVista / VTK
 *   **Использование:** 3D-визуализация.
-*   **Лицензия:** MIT License (PyVista), BSD 3-Clause (VTK).
+*   **Лицензия:** MIT License (PyVista), BSD 3-Clause License (VTK).
 
-## 12. PyInstaller
+## 13. PyInstaller
 *   **Использование:** Сборка standalone-исполняемых файлов.
 *   **Лицензия:** GPL v2 с исключением для сборки приложений.
 
-## 13. Requests
+## 14. Requests
 *   **Использование:** Отправка HTTP-запросов (уведомления в Discord).
 *   **Лицензия:** Apache License 2.0.
 
-## 14. ReportLab
+## 15. ReportLab
 *   **Использование:** Генерация PDF-отчетов.
+*   **Лицензия:** BSD 3-Clause License.
+
+## 16. psutil
+*   **Использование:** Сбор системной информации и диагностика производительности (профайлер и баг-репорты).
 *   **Лицензия:** BSD 3-Clause License.
